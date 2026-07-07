@@ -36,6 +36,7 @@ from . import api_python
 from . import api_resources
 from . import api_survey
 from . import api_composite
+from . import api_prefs
 from . import trace as trace
 from . import api_sigmaker
 
@@ -66,6 +67,7 @@ __all__ = [
     "api_survey",
     "api_composite",
     "api_sigmaker",
+    "api_prefs",
     # Re-exported components
     "idasync",
     "IDAError",

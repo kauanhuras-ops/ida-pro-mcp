@@ -8,6 +8,7 @@ from .zeromcp import (
     McpHttpRequestHandler,
     get_current_request_external_base_url,
 )
+from .toon_out import resolve_use_toon, to_llm_text
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
@@ -91,6 +92,25 @@ def _cache_output(output_id: str, data: Any) -> None:
     _output_cache[output_id] = data
 
 
+def _toon_rewrite_content(content: list) -> None:
+    """Re-render JSON object/array text blocks as TOON (in place).
+
+    Only object/array payloads are converted (TOON's sweet spot); plain-text
+    messages and scalar values are left untouched.
+    """
+    for block in content or []:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        stripped = block.get("text", "").lstrip()
+        if not stripped or stripped[0] not in "{[":
+            continue
+        try:
+            obj = json.loads(block["text"])
+        except Exception:
+            continue
+        block["text"] = to_llm_text(obj)
+
+
 def _install_tools_call_patch() -> None:
     original = MCP_SERVER.registry.methods["tools/call"]
 
@@ -108,6 +128,13 @@ def _install_tools_call_patch() -> None:
 
         serialized = json.dumps(structured)
         if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
+            if resolve_use_toon():
+                # Re-render the model-facing text as TOON. structuredContent
+                # is preserved so MCP clients that validate outputSchema ->
+                # structuredContent (e.g. Pi Agent) don't reject the response.
+                # The model still reads content[].text; clients that want
+                # structured data read structuredContent.
+                _toon_rewrite_content(response.get("content", []))
             return response
 
         output_id = _generate_output_id()
@@ -118,18 +145,20 @@ def _install_tools_call_patch() -> None:
 
         content = [{
             "type": "text",
-            "text": json.dumps(preview, separators=(",", ":")),
+            "text": to_llm_text(preview),
         }, {
             "type": "text",
             "text": download_meta["download_hint"],
         }]
 
-        return {
-            "structuredContent": preview,
+        result = {
             "content": content,
             "isError": False,
             "_meta": {"ida_mcp": download_meta},
         }
+        if not resolve_use_toon():
+            result["structuredContent"] = preview
+        return result
 
     MCP_SERVER.registry.methods["tools/call"] = patched
 

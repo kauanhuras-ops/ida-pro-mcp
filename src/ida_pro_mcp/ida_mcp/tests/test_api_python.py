@@ -69,7 +69,28 @@ def test_py_eval_exception_goes_to_stderr():
     result = py_eval('raise RuntimeError("boom")')
     assert result["result"] == ""
     assert result["stdout"] == ""
+    assert isinstance(result["stderr"], str), type(result["stderr"])
     assert "RuntimeError: boom" in result["stderr"]
+
+
+@test()
+def test_py_eval_exception_stderr_is_plain_string_not_list():
+    """py_eval's stderr must be a string (not traceback.format_exception list).
+
+    Strict MCP clients (e.g. Pi Agent) validate structuredContent against the
+    outputSchema. The PythonExecResult schema declares ``stderr: str``, so a
+    ``list[str]`` from ``traceback.format_exception(e)`` triggers MCP error
+    -32602 in those clients. The fix joins the traceback lines so the value
+    is always a single string.
+    """
+    result = py_eval('raise ValueError("bad value")')
+    assert isinstance(result["stderr"], str), (
+        f"stderr must be str, got {type(result['stderr']).__name__}: "
+        f"{result['stderr']!r}"
+    )
+    assert "ValueError: bad value" in result["stderr"]
+    # And not a Python list literal.
+    assert not result["stderr"].startswith("[")
 
 
 @test()

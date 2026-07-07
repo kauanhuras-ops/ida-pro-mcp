@@ -18,6 +18,7 @@ from ida_pro_mcp.ida_mcp.discovery import register_instance, unregister_instance
 from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
 from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
 from ida_pro_mcp.ida_mcp.rpc import set_download_base_url, tool
+from ida_pro_mcp.ida_mcp.utils import get_server_version
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 from ida_pro_mcp.worker_lifecycle import WorkerLifecycle
 
@@ -217,6 +218,8 @@ def main():
     global _BOUND_HOST, _BOUND_PORT
     _BOUND_HOST = args.host
     _BOUND_PORT = args.port
+
+    logger.info("IDA Pro MCP v%s starting (host=%s, port=%d)", get_server_version(), args.host, args.port)
 
     session_manager = get_session_manager()
 

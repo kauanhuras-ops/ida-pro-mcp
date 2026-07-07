@@ -8,6 +8,72 @@ import traceback
 from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
 from types import UnionType
 
+
+def _format_type_hint(hint: Any) -> str:
+    """Render a type hint in a short, model-readable form for error messages."""
+    if hint is None:
+        return "any"
+    origin = get_origin(hint)
+    args = get_args(hint)
+    if origin in (Union, UnionType):
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            return _format_type_hint(non_none[0])
+        return " | ".join(_format_type_hint(a) for a in non_none)
+    if origin is list:
+        inner = ", ".join(_format_type_hint(a) for a in args) if args else "Any"
+        return f"list[{inner}]"
+    if origin is dict:
+        if len(args) == 2:
+            return f"dict[{_format_type_hint(args[0])}, {_format_type_hint(args[1])}]"
+        return "dict"
+    if origin is tuple:
+        return "tuple[" + ", ".join(_format_type_hint(a) for a in args) + "]"
+    if origin is not None:
+        name = getattr(origin, "__name__", None) or str(origin)
+        if args:
+            return f"{name}[" + ", ".join(_format_type_hint(a) for a in args) + "]"
+        return name
+    if isinstance(hint, type):
+        return hint.__name__
+    name = getattr(hint, "__name__", None)
+    if name:
+        return name
+    return str(hint) if hint is not None else "any"
+
+
+def _format_swig_unwrapped_traceback(e: BaseException) -> str:
+    """Return a traceback with the original Python exception surfaced.
+
+    IDA's SWIG director wraps callback exceptions in a generic
+    ``RuntimeError: SWIG director method error. ...``. When we detect that
+    wrapper, walk the ``__cause__`` / ``__context__`` chain to find the
+    original exception and emit ``Type: message`` followed by the full
+    traceback. Returns ``""`` if no unwrapping was needed (caller should
+    fall back to the standard traceback formatting).
+    """
+    if not (
+        isinstance(e, RuntimeError)
+        and str(e).startswith("SWIG director method error")
+    ):
+        return ""
+
+    original = e
+    seen: set[int] = set()
+    while original is not None and id(original) not in seen:
+        seen.add(id(original))
+        cause = original.__cause__ or original.__context__
+        if cause is None:
+            break
+        original = cause
+
+    if original is e:
+        return ""
+
+    header = f"{type(original).__name__}: {original}"
+    chain = traceback.format_exception(e)
+    return f"{header}\n(Original exception surfaced through SWIG director wrapper.)\n\n" + "".join(chain)
+
 JsonRpcId: TypeAlias = str | int | float | None
 
 # Thread-local storage for current request context (ID + cancel event)
@@ -193,9 +259,12 @@ class JsonRpcRegistry:
                 "code": -32603,
                 "message": f"Internal Error: {str(e)}",
             }
+        message = _format_swig_unwrapped_traceback(e) or "\n".join(
+            traceback.format_exception(e)
+        ).strip()
         return {
             "code": -32603,
-            "message": "\n".join(traceback.format_exception(e)).strip() + "\n\nPlease report a bug!",
+            "message": message + "\n\nPlease report a bug!",
         }
 
     def _call(self, method: str, params: Any) -> Any:
@@ -244,19 +313,32 @@ class JsonRpcRegistry:
         # Validate dict params
         if isinstance(params, dict):
             # Check all required params are present
-            missing = set(required_params) - set(params.keys())
+            missing = [p for p in required_params if p not in params]
             if missing:
+                lines = []
+                for name in missing:
+                    hint = hints.get(name)
+                    type_str = _format_type_hint(hint)
+                    lines.append(f"  - '{name}' ({type_str})")
+                accepted = ", ".join(f"'{p}'" for p in sig.parameters.keys())
+                plural = "s" if len(missing) > 1 else ""
                 raise JsonRpcException(
                     -32602,
-                    f"Invalid params: missing required parameters: {list(missing)}"
+                    "Invalid params: missing required parameter"
+                    f"{plural}:\n" + "\n".join(lines)
+                    + f"\nAccepted parameters: {accepted}"
                 )
 
             # Check no extra params
-            extra = set(params.keys()) - set(sig.parameters.keys())
+            extra = sorted(set(params.keys()) - set(sig.parameters.keys()))
             if extra:
+                accepted = ", ".join(f"'{p}'" for p in sig.parameters.keys())
+                quoted = ", ".join(f"'{p}'" for p in extra)
+                plural = "s" if len(extra) > 1 else ""
                 raise JsonRpcException(
                     -32602,
-                    f"Invalid params: unexpected parameters: {list(extra)}"
+                    f"Invalid params: unexpected parameter{plural}: {quoted}\n"
+                    f"Accepted parameters: {accepted}"
                 )
 
             validated_params = {}
@@ -318,14 +400,27 @@ class JsonRpcRegistry:
                             break
 
                     if not type_matched:
-                        raise JsonRpcException(-32602, "Invalid params: expected {} for {}, got {}".format(
-                            " | ".join(
-                                t.__name__ if isinstance(t, type) else str(t)
-                                for t in args
-                            ),
-                            param_name,
-                            type(value).__name__
-                        ))
+                        expected_str = " | ".join(
+                            _format_type_hint(t) for t in args if t is not type(None)
+                        )
+                        got = type(value).__name__
+                        hint = ""
+                        if got == "dict":
+                            keys = sorted(value.keys())
+                            keys_str = ", ".join(f"'{k}'" for k in keys[:5])
+                            if len(keys) > 5:
+                                keys_str += ", ..."
+                            hint = (
+                                f"\nDid you mean to pass a list of values? "
+                                f"Got a dict with keys [{keys_str}]. "
+                                f"Either unwrap the value (e.g. '{keys[0]}'={value[keys[0]]!r}) "
+                                f"or pass the list directly."
+                            ) if keys else "\nDid you mean to pass a list of values?"
+                        raise JsonRpcException(
+                            -32602,
+                            f"Invalid params: '{param_name}' must be {expected_str}, "
+                            f"got {got}{hint}"
+                        )
                     validated_params[param_name] = value
                     continue
 

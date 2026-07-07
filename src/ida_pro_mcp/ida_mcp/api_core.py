@@ -34,6 +34,7 @@ from .utils import (
     Page,
     ImportQuery,
     get_function,
+    get_server_version,
     normalize_dict_list,
     normalize_list_input,
     parse_address,
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 class ServerHealthResult(TypedDict):
     status: str
+    version: str
     uptime_sec: float
     idb_path: str | None
     module: str
@@ -361,6 +363,7 @@ def _build_health_payload() -> dict:
 
     return {
         "status": "ok",
+        "version": get_server_version(),
         "uptime_sec": round(time.time() - _server_started_at, 3),
         "idb_path": idb_path,
         "module": ida_nalt.get_root_filename(),

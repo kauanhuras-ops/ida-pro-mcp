@@ -252,6 +252,29 @@ Worker controls:
 - `ida://export/{name}` - Export details by name
 - `ida://xrefs/from/{addr}` - Cross-references from address
 
+## IDA 9 API Migration Notes
+
+IDA 9 reorganised several long-standing Python API entry points. Code that
+worked against IDA 7/8 will frequently raise `AttributeError` against IDA 9.
+Use this table when writing `py_eval` / `py_exec_file` snippets:
+
+| IDA 7/8 (broken in 9)                | IDA 9 (current)                                                |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `ida_typeinf.get_tinfo(tif, ea)`     | `idaapi.get_tinfo(tif, ea)`                                    |
+| `idc.SN_FORCE`                       | `ida_name.SN_FORCE`                                            |
+| `idc.apply_type(tif)`                | `ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)` |
+| `ida_typeinf.for_each_named_type(...)` | removed — iterate `ida_typeinf.get_named_type` results        |
+| `ida_typeinf.get_ordinal_qty(...)`   | removed                                                        |
+| `func.startEA` / `func.endEA`        | `func.start_ea` / `func.end_ea`                                |
+| `insn.Operands[0]`                   | `insn.ops[0]`                                                  |
+| `idc.GetCommentEx(ea, repeatable)`   | `idaapi.get_comment_ex(ea, repeatable)`                        |
+| `idc.SetType(ea, decl)`              | `ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)` |
+| `idaapi.set_name(ea, name, 0)`       | `ida_name.set_name(ea, name, ida_name.SN_FORCE)`               |
+
+When in doubt, prefer the `idaapi` / `ida_*` modules over the legacy `idc.*`
+shims — the `idc` namespace still exists for compatibility but most APIs have
+moved. If a `py_eval` snippet raises `AttributeError`, check this list first.
+
 ## Core Functions
 
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).

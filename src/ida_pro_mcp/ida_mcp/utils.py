@@ -31,6 +31,46 @@ import idc
 from .sync import IDAError
 
 # ============================================================================
+# Version Detection
+# ============================================================================
+
+
+def get_server_version() -> str:
+    """Return the running ``ida-pro-mcp`` package version.
+
+    Tries (in order):
+      1. ``importlib.metadata.version("ida-pro-mcp")`` — works for installed
+         wheels and ``uv pip install -e .`` editable installs.
+      2. Reading ``pyproject.toml`` adjacent to the source tree — works in
+         development where ``importlib.metadata`` may not see the package.
+      3. Fallback ``"unknown"`` if both lookups fail (e.g. frozen bundle).
+    """
+    try:
+        import importlib.metadata as _md
+
+        return _md.version("ida-pro-mcp")
+    except Exception:
+        pass
+
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+
+        # utils.py lives at <repo>/src/ida_pro_mcp/ida_mcp/utils.py — the
+        # pyproject.toml is three levels up.
+        pyproject = _Path(__file__).resolve().parents[3] / "pyproject.toml"
+        if pyproject.is_file():
+            text = pyproject.read_text(encoding="utf-8", errors="replace")
+            m = _re.search(r'^version\s*=\s*"([^"]+)"', text, _re.MULTILINE)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+
+    return "unknown"
+
+
+# ============================================================================
 # Analysis Prompt Configuration
 # ============================================================================
 

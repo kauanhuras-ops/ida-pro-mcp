@@ -14,11 +14,25 @@ if TYPE_CHECKING:
     from . import ida_mcp
 
 
+def _get_plugin_version() -> str:
+    """Best-effort version string for the running plugin (cached)."""
+    try:
+        if TYPE_CHECKING:
+            from .ida_mcp.utils import get_server_version
+        else:
+            from ida_mcp.utils import get_server_version
+        return get_server_version()
+    except Exception:
+        return "unknown"
+
+
 NETNODE_AUTOSTART = "$ ida_mcp.autostart"
 NETNODE_CONFIG = "$ ida_mcp.config"
 _ALT_PORT = 0  # altval index for the persisted port (0 = not set)
 _ALT_PERSIST = 1  # altval index for the "save host/port" preference
 _SUP_HOST = 0  # supval index for the persisted host
+
+_PLUGIN_VERSION = _get_plugin_version()
 
 
 def _get_autostart() -> bool:
@@ -208,7 +222,7 @@ class MCPUIHooks(ida_kernwin.UI_Hooks):
         # the MCP server lifecycle itself and would otherwise hit a port conflict
         # because unload_package creates a separate MCP_SERVER instance.
         if self.plugin.autostart and ida_kernwin.is_idaq():
-            print("[MCP] Autostarting server...")
+            print(f"[MCP] Autostarting server (v{_PLUGIN_VERSION})...")
             self.plugin.run(0)
         self.unhook()
 
@@ -239,12 +253,12 @@ class MCP(idaapi.plugin_t):
             self.port = self.DEFAULT_PORT
 
         if self.autostart and ida_kernwin.is_idaq():
-            print("[MCP] Plugin loaded, server will start automatically")
+            print(f"[MCP] v{_PLUGIN_VERSION} loaded, server will start automatically")
         elif not ida_kernwin.is_idaq():
-            print("[MCP] Plugin loaded (idalib mode, server managed externally)")
+            print(f"[MCP] v{_PLUGIN_VERSION} loaded (idalib mode, server managed externally)")
         else:
             print(
-                f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
+                f"[MCP] v{_PLUGIN_VERSION} loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
             )
 
         # Register a separate menu item for host/port configuration
@@ -294,6 +308,7 @@ class MCP(idaapi.plugin_t):
                 MCP_SERVER.serve(
                     self.host, port, request_handler=IdaMcpHttpRequestHandler
                 )
+                print(f"[MCP] v{_PLUGIN_VERSION} server listening on http://{self.host}:{port}")
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 self._register_instance(port)

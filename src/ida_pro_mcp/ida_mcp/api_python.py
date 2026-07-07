@@ -25,6 +25,46 @@ from .rpc import tool, unsafe
 from .sync import idasync
 from .utils import parse_address, get_function
 
+
+def _format_exception(e: BaseException) -> str:
+    """Format an exception for the MCP error response.
+
+    IDA's SWIG director wraps callback exceptions in a generic
+    ``RuntimeError: SWIG director method error. ...`` that hides the original
+    Python exception type. When the user code triggers such a wrapper (e.g.
+    ``AttributeError`` raised inside a UI hook callback), we unwrap it so the
+    original ``AttributeError``/``NameError``/etc. is surfaced directly. Falls
+    back to a regular traceback when the wrapper is not detected.
+    """
+    import traceback
+
+    msg = str(e)
+    tb_text = "".join(traceback.format_exception(e))
+    if (
+        isinstance(e, RuntimeError)
+        and msg.startswith("SWIG director method error")
+    ):
+        # Walk the exception chain to find the original Python exception.
+        original = e
+        seen: set[int] = set()
+        while original is not None and id(original) not in seen:
+            seen.add(id(original))
+            cause = original.__cause__ or original.__context__
+            if cause is None:
+                break
+            original = cause
+
+        if original is not e:
+            return (
+                f"{type(original).__name__}: {original}\n"
+                f"(Original exception surfaced through SWIG director wrapper; "
+                f"see chain below for context.)\n\n"
+                + tb_text
+            )
+
+    return tb_text
+
+
 # ============================================================================
 # Shared execution context
 # ============================================================================
@@ -113,7 +153,20 @@ class PythonExecResult(TypedDict):
 def py_eval(
     code: Annotated[str, "Python code"],
 ) -> PythonExecResult:
-    """Execute Python in IDA context and return result/stdout/stderr."""
+    """Execute Python in IDA context and return result/stdout/stderr.
+
+    IMPORTANT: each call runs in a fresh ``exec`` scope. Variables, imports
+    and function definitions from previous calls are NOT available. Always
+    include every ``import`` statement you need in the same call. Example:
+
+        from idaapi import get_func
+        import idautils
+        funcs = [f for f in idautils.Functions() if get_func(f)]
+
+    A single trailing expression is evaluated and returned as ``result``
+    (Jupyter-style); assign to ``result`` explicitly if you need a specific
+    value returned.
+    """
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -186,13 +239,13 @@ def py_eval(
             "stderr": stderr_text,
         }
 
-    except Exception:
+    except Exception as e:
         import traceback
 
         return {
             "result": "",
             "stdout": "",
-            "stderr": traceback.format_exc(),
+            "stderr": _format_exception(e),
         }
     finally:
         sys.stdout = old_stdout
@@ -246,13 +299,11 @@ def py_exec_file(
             "stderr": stderr_text,
         }
 
-    except Exception:
-        import traceback
-
+    except Exception as e:
         return {
             "result": "",
             "stdout": stdout_capture.getvalue(),
-            "stderr": traceback.format_exc(),
+            "stderr": _format_exception(e),
         }
     finally:
         sys.stdout = old_stdout

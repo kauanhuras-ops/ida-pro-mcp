@@ -160,7 +160,18 @@ class InferTypeResult(TypedDict, total=False):
 def declare_type(
     decls: Annotated[list[str] | str, "C type declarations"],
 ) -> list[DeclareTypeResult]:
-    """Declare C type definitions in local type library."""
+    """Declare C type definitions in local type library.
+
+    Each ``decl`` is a full C declaration string, e.g.::
+
+        struct Foo { int x; char y; };
+        typedef int my_int;
+
+    Note: the underlying ``ida_typeinf.parse_decl`` is invoked with the
+    output ``tinfo_t`` first (``parse_decl(tif, None, decl, flags)``).
+    The MCP tool handles this for you — you just pass the declaration
+    string and the populated type is added to the local type library.
+    """
     decls = normalize_list_input(decls)
     results = []
 
@@ -710,11 +721,33 @@ def type_query(
 def type_inspect(
     queries: Annotated[
         list[TypeInspectQuery] | TypeInspectQuery,
-        "Inspect named types and optionally include member layout",
+        "Type inspection request(s). Single: {'name': 'MyStruct', "
+        "'include_members': True, 'max_members': 128}. Multiple: a list of such "
+        "dicts. ``name`` is required; the rest are optional. For convenience, a "
+        "bare string or list of strings is also accepted at runtime, but the "
+        "preferred shape is the typed dict(s) shown above.",
     ],
 ) -> list[TypeInspectResult]:
-    """Inspect named types (size/kind/declaration/members)."""
-    queries = normalize_dict_list(queries)
+    """Inspect named types (size/kind/declaration/members).
+
+    The typed shape ``{"name": "...", "include_members": ..., "max_members": ...}``
+    is the documented contract. For convenience the function also accepts a
+    bare string or a list of strings (each becomes ``{"name": ...}``), but the
+    public schema advertises only the typed shape — bare strings were unioned
+    with the typed dict earlier, and the resulting ``anyOf`` schema caused
+    models to send empty strings (collapsing to "Type name is required").
+    """
+    # Accept a bare string / list[str] for convenience — keep the runtime
+    # coercion so older callers don't break, even though the schema only
+    # advertises the typed shape.
+    queries = normalize_dict_list(
+        queries, string_parser=lambda s: {"name": s.strip()}
+    )
+    # Re-normalize once more in case the input was a JSON string that decoded
+    # into a list[str] (normalize_dict_list returns the parsed list verbatim).
+    queries = normalize_dict_list(
+        queries, string_parser=lambda s: {"name": s.strip()}
+    )
     results = []
 
     for query in queries:
