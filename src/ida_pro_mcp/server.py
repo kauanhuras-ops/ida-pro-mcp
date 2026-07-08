@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import traceback
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
@@ -54,6 +56,21 @@ except ImportError:
 
         sys.path.pop(0)
 
+try:
+    from .routing import (
+        SessionTargets,
+        list_instances_to_response,
+        forward_json_rpc,
+        select_target,
+    )
+except ImportError:
+    from routing import (  # type: ignore[no-redef]
+        SessionTargets,
+        list_instances_to_response,
+        forward_json_rpc,
+        select_target,
+    )
+
 DEFAULT_IDA_HOST = "127.0.0.1"
 DEFAULT_IDA_PORT = 13337
 IDA_HOST = DEFAULT_IDA_HOST
@@ -61,6 +78,15 @@ IDA_PORT = DEFAULT_IDA_PORT
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
+
+# Per-MCP-session routing state. Each MCP transport session (HTTP Mcp-Session-Id
+# or "stdio:default") picks a target IDA via idb_select. While a session has a
+# target, every tools/call from it is forwarded to that IDA. Concurrent
+# sessions stay isolated: project A for one client, project B for another.
+_SESSION_TARGETS = SessionTargets()
+
+# Tools the proxy handles locally instead of forwarding to the IDA.
+_PROXY_LOCAL_TOOLS = frozenset({"idb_list", "idb_select"})
 
 _OUTPUT_PATH_RE = re.compile(r"^/output/([a-f0-9-]+)\.(\w+)$")
 
@@ -87,35 +113,27 @@ def _get_proxy_request_headers() -> dict[str, str]:
     return headers
 
 
-def _proxy_to_ida(payload: bytes | str | dict) -> dict:
-    """Send a JSON-RPC request to the configured IDA instance and return the response."""
-    if isinstance(payload, dict):
-        payload = json.dumps(payload)
-    if isinstance(payload, str):
-        payload = payload.encode("utf-8")
+def _proxy_to_ida(payload: bytes | str | dict, host: str, port: int) -> dict:
+    """Forward a JSON-RPC request to ``host:port`` and return the response.
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
-    try:
-        conn.request(
-            "POST",
-            _get_proxy_request_path(),
-            payload,
-            _get_proxy_request_headers(),
-        )
-        response = conn.getresponse()
-        raw_data = response.read().decode()
-        if response.status >= 400:
-            raise RuntimeError(
-                f"HTTP {response.status} {response.reason}: {raw_data}"
-            )
-        return json.loads(raw_data)
-    finally:
-        conn.close()
+    If the connection is refused (IDA was closed/restarting) we poll the port
+    for up to RECOVERY_TIMEOUT_SEC before giving up. Other errors propagate
+    immediately — the dispatcher's error envelope will surface them to the
+    caller. Mutating operations are NOT silently retried: the caller can see
+    whether the request reached the IDA before deciding to retry.
+    """
+    return forward_json_rpc(
+        payload,
+        host=host,
+        port=port,
+        path=_get_proxy_request_path(),
+        headers=_get_proxy_request_headers(),
+    )
 
 
-def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
-    """Proxy a raw output download from the configured IDA instance."""
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+def _proxy_output_download(path: str, host: str, port: int) -> tuple[int, str, list[tuple[str, str]], bytes]:
+    """Proxy a raw output download from ``host:port``."""
+    conn = http.client.HTTPConnection(host, port, timeout=30)
     try:
         conn.request("GET", path)
         response = conn.getresponse()
@@ -124,8 +142,83 @@ def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], 
         conn.close()
 
 
+# ============================================================================
+# Per-session routing
+# ============================================================================
+
+
+def _current_proxy_session_id() -> str:
+    """Session key for the current request. Stdio clients share ``stdio:default``;
+    HTTP clients are keyed on ``Mcp-Session-Id`` (or ``http:anonymous``)."""
+    return mcp.get_current_transport_session_id() or "stdio:default"
+
+
+def _resolve_session_target() -> tuple[str, int, str]:
+    """Pick (host, port, idb_path) for the current request.
+
+    Priority:
+      1. Per-session target chosen via idb_select.
+      2. Global IDA_HOST / IDA_PORT set by --ida-rpc or startup discovery.
+         ``idb_path`` is unknown in this case — empty string.
+    """
+    target = _SESSION_TARGETS.get(_current_proxy_session_id())
+    if target is not None:
+        return target
+    return (IDA_HOST, IDA_PORT, "")
+
+
+def _idb_list_impl() -> dict:
+    """Return all known IDA instances, with the current session's target marked.
+
+    Runs locally in the proxy — does not forward to any single IDA, so the
+    agent sees every project it's allowed to attach to, not just the one
+    the proxy happened to auto-pick.
+    """
+    return list_instances_to_response(
+        discover_instances(),
+        current=_resolve_session_target(),
+    )
+
+
+def _idb_select_impl(target: str) -> dict:
+    """Pin the current session to one IDA by ``idb_path`` (preferred) or ``port``.
+
+    Each MCP session keeps its own target — concurrent sessions can attach to
+    different IDAs. Once selected, every ``tools/call`` from this session is
+    forwarded to that IDA. If the IDA goes down, the proxy polls its port
+    for up to 30 s before reporting the failure.
+    """
+    sid = _current_proxy_session_id()
+
+    def set_target(host: str, port: int, idb_path: str) -> None:
+        _SESSION_TARGETS.set(sid, host, port, idb_path)
+
+    return select_target(target, discover_instances(), set_target=set_target)
+
+
+def _register_proxy_local_tools() -> None:
+    """Register ``idb_list`` / ``idb_select`` on the proxy's mcp registry.
+
+    ``McpServer.tool`` attaches metadata so the names appear in ``tools/list``.
+    The actual dispatch still flows through the registry's ``tools/call``
+    handler — we rely on ``dispatch_proxy`` to detect these names and route
+    them to the local handlers instead of forwarding to an IDA.
+    """
+    mcp.tool(_idb_list_impl)
+    mcp.tool(_idb_select_impl)
+
+
+_register_proxy_local_tools()
+
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
-    """Dispatch JSON-RPC requests by proxying everything (except initialize/notifications) to IDA."""
+    """Dispatch JSON-RPC requests.
+
+    - ``initialize`` / notifications  → original handler (handled locally).
+    - ``tools/call`` for ``idb_list`` / ``idb_select`` → local handlers.
+    - everything else → forward to the current session's targeted IDA,
+      waiting up to 30 s on connection-refused in case the IDA is restarting.
+    """
     if not isinstance(request, dict):
         request_obj: JsonRpcRequest = json.loads(request)
     else:
@@ -136,8 +229,15 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     if request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
+    if request_obj["method"] == "tools/call":
+        params = request_obj.get("params") or {}
+        tool_name = params.get("name") if isinstance(params, dict) else None
+        if tool_name in _PROXY_LOCAL_TOOLS:
+            return dispatch_original(request)
+
+    host, port, idb_path = _resolve_session_target()
     try:
-        return _proxy_to_ida(request)
+        return _proxy_to_ida(request, host, port)
     except Exception as e:
         full_info = traceback.format_exc()
         request_id = request_obj.get("id")
@@ -145,6 +245,10 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
             return None  # Notification, no response needed
 
         shortcut = "Ctrl+Option+M" if sys.platform == "darwin" else "Ctrl+Alt+M"
+        location_hint = (
+            f"the targeted IDA at {host}:{port}"
+            + (f" ({idb_path})" if idb_path else "")
+        )
         return JsonRpcResponse(
             {
                 "jsonrpc": "2.0",
@@ -152,9 +256,13 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                     "code": -32000,
                     "message": (
                         "Failed to complete request to IDA Pro. "
-                        f"Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n"
-                        "The request was not retried automatically. "
-                        "If this was a mutating operation, verify IDA state before retrying.\n"
+                        f"{location_hint}. "
+                        f"Was the plugin (Edit -> Plugins -> MCP, {shortcut}) "
+                        "loaded and the server started? If the IDA process "
+                        "crashed, restart it; if it was never started, run "
+                        "idb_list to verify availability before retrying. "
+                        "This request was NOT retried silently — verify IDA "
+                        "state before retrying mutating operations.\n"
                         f"{full_info}"
                     ),
                     "data": str(e),
@@ -173,8 +281,9 @@ class ProxyHttpRequestHandler(McpHttpRequestHandler):
         if _OUTPUT_PATH_RE.match(parsed.path):
             if not self._check_api_request():
                 return
+            host, port, _ = _resolve_session_target()
             try:
-                status, _, response_headers, body = _proxy_output_download(parsed.path)
+                status, _, response_headers, body = _proxy_output_download(parsed.path, host, port)
             except Exception as e:
                 self.send_error(502, f"Failed to proxy output download: {e}")
                 return

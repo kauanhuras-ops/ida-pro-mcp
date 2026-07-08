@@ -119,7 +119,7 @@ def test_server_proxy_to_ida_forwards_session_and_extensions():
         server.mcp._transport_session_id.data = "http:session-456"
         server.mcp._enabled_extensions.data = {"dbg"}
         try:
-            server._proxy_to_ida(b"{}")
+            server._proxy_to_ida(b"{}", server.IDA_HOST, server.IDA_PORT)
             assert len(_RecordingConnection.calls) == 1
             call = _RecordingConnection.calls[0]
             assert call["path"] == "/mcp?ext=dbg"
@@ -172,7 +172,7 @@ def test_ida_rpc_ext_flows_through_to_proxy_path():
         try:
             args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
             server._resolve_ida_rpc(args)
-            server._proxy_to_ida(b"{}")
+            server._proxy_to_ida(b"{}", server.IDA_HOST, server.IDA_PORT)
             assert len(_RecordingConnection.calls) == 1
             assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg"
         finally:
