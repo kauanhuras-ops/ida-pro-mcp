@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import sys
+from unittest import mock
 
 from ..framework import test
 from ..rpc import MCP_SERVER, MCP_UNSAFE
@@ -126,6 +127,155 @@ def test_server_proxy_to_ida_forwards_session_and_extensions():
             assert call["headers"].get("Mcp-Session-Id") == "session-456"
         finally:
             server.http.client.HTTPConnection = original_conn
+
+
+class _FakeToolsListConn:
+    """Stand-in for HTTPConnection that returns a canned tools/list response."""
+
+    def __init__(self, host, port, timeout=None):
+        pass
+
+    def request(self, method, url, body=None, headers=None):
+        pass
+
+    def getresponse(self_inner):  # noqa: N805
+        class R:
+            status = 200
+            reason = "OK"
+
+            def read(inner):
+                return (
+                    b'{"jsonrpc":"2.0","id":1,'
+                    b'"result":{"tools":[{"name":"decompile",'
+                    b'"description":"Decompile at addr"},'
+                    b'{"name":"list_funcs","description":"List functions"}]}}'
+                )
+
+        return R()
+
+    def close(self):
+        pass
+
+
+@test()
+def test_dispatch_proxy_tools_list_includes_proxy_local_tools():
+    """tools/list must merge IDA tools with proxy-local idb_list / idb_select.
+
+    Before this fix the proxy forwarded tools/list to the IDA verbatim, so the
+    proxy-local routing tools were never advertised to the agent and stayed
+    invisible after a fresh Claude Code session connected.
+    """
+    with _saved_target():
+        original_conn = server.http.client.HTTPConnection
+        server.http.client.HTTPConnection = _FakeToolsListConn
+        server.IDA_HOST = "127.0.0.1"
+        server.IDA_PORT = 13337
+        try:
+            response = server.dispatch_proxy(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {},
+                }
+            )
+            assert response is not None
+            tools = response.get("result", {}).get("tools", [])
+            names = {t["name"] for t in tools}
+        finally:
+            server.http.client.HTTPConnection = original_conn
+
+    assert "decompile" in names, tools
+    assert "list_funcs" in names, tools
+    assert "idb_list" in names, f"proxy-local idb_list missing: {names}"
+    assert "idb_select" in names, f"proxy-local idb_select missing: {names}"
+
+
+class _AlwaysRefuseConn:
+    def __init__(self, host, port, timeout=None):
+        pass
+
+    def request(self, method, url, body=None, headers=None):
+        raise ConnectionRefusedError("no IDA")
+
+    def getresponse(self_inner):  # noqa: N805
+        raise AssertionError
+
+    def close(self):
+        pass
+
+
+@test()
+def test_dispatch_proxy_tools_list_falls_back_to_local_when_ida_down():
+    """If the IDA is unreachable on tools/list, still show local tools so the
+    agent can recover via idb_list once an IDA comes back up."""
+    with _saved_target():
+        original_conn = server.http.client.HTTPConnection
+        server.http.client.HTTPConnection = _AlwaysRefuseConn
+        server.IDA_HOST = "127.0.0.1"
+        server.IDA_PORT = 13337
+        # Shrink the recovery loop so the test doesn't wait the full 30s.
+        original_timeout = server.routing.RECOVERY_TIMEOUT_SEC
+        original_poll = server.routing.RECOVERY_POLL_INTERVAL_SEC
+        server.routing.RECOVERY_TIMEOUT_SEC = 0.05
+        server.routing.RECOVERY_POLL_INTERVAL_SEC = 0.01
+        try:
+            response = server.dispatch_proxy(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {},
+                }
+            )
+            assert response is not None
+            tools = response.get("result", {}).get("tools", [])
+            names = {t["name"] for t in tools}
+        finally:
+            server.routing.RECOVERY_TIMEOUT_SEC = original_timeout
+            server.routing.RECOVERY_POLL_INTERVAL_SEC = original_poll
+            server.http.client.HTTPConnection = original_conn
+
+    assert "idb_list" in names, names
+    assert "idb_select" in names, names
+
+
+@test()
+def test_dispatch_proxy_idb_call_handled_locally():
+    """tools/call for idb_list / idb_select never forwards to the IDA."""
+    with _saved_target():
+        original_conn = server.http.client.HTTPConnection
+        _RecordingConnection.calls = []
+        server.http.client.HTTPConnection = _RecordingConnection
+        server.IDA_HOST = "127.0.0.1"
+        server.IDA_PORT = 13337
+        try:
+            # Stub discover_instances so idb_list returns a deterministic set.
+            with mock.patch.object(
+                server, "discover_instances", return_value=[]
+            ):
+                response = server.dispatch_proxy(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "idb_list", "arguments": {}},
+                    }
+                )
+        finally:
+            server.http.client.HTTPConnection = original_conn
+
+    assert response is not None
+    assert _RecordingConnection.calls == [], (
+        "idb_list must not be forwarded to the IDA"
+    )
+    instances = response.get("result", {}).get("structuredContent", {}).get(
+        "instances", None
+    )
+    if instances is None:
+        # Older schemas: result is the dict directly.
+        instances = response.get("result", {}).get("instances", [])
+    assert isinstance(instances, list)
 
 
 @test()

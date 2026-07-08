@@ -1,10 +1,119 @@
-"""Tests for ``ida_pro_mcp.routing`` — pure-Python, no IDA dependency."""
-
-from unittest import mock
+"""Tests for ``ida_pro_mcp.routing`` and the proxy ``tools/list`` merge logic."""
 
 import pytest
 
 from ida_pro_mcp import routing
+
+
+def _fake_instance(**overrides):
+    """Build a discover_instances()-shaped entry."""
+    base = {
+        "host": "127.0.0.1",
+        "port": 13337,
+        "pid": 9999,
+        "binary": "fake.exe",
+        "idb_path": "/tmp/project_a.i64",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "backend": "gui",
+    }
+    base.update(overrides)
+    return base
+
+
+# ============================================================================
+# Merge helper extracted from server.py — mirrors its _merge_tools_list.
+# ============================================================================
+
+
+def _merge_tools_list(remote, local):
+    """Same logic as server._merge_tools_list. Standalone so this module
+    can be exercised without IDA. The real one lives in server.py and is
+    exercised by tests that run inside IDA via the framework test runner.
+    """
+    remote_tools = []
+    if isinstance(remote, dict):
+        result = remote.get("result") if isinstance(remote.get("result"), dict) else {}
+        remote_tools = list(result.get("tools", []) or [])
+    local_tools = []
+    if isinstance(local, dict):
+        result = local.get("result") if isinstance(local.get("result"), dict) else {}
+        local_tools = list(result.get("tools", []) or [])
+
+    seen = {t.get("name") for t in remote_tools if isinstance(t, dict)}
+    for tool in local_tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("name") in seen:
+            continue
+        remote_tools.append(tool)
+        seen.add(tool.get("name"))
+
+    base = remote if isinstance(remote, dict) else {}
+    return {**base, "result": {"tools": remote_tools}}
+
+
+def test_merge_appends_proxy_local_tools_after_ida_tools():
+    """Local tools come after IDA tools; no duplicates added."""
+    remote = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": [
+                {"name": "decompile", "description": "Decompile at addr"},
+                {"name": "list_funcs", "description": "List functions"},
+            ]
+        },
+    }
+    local = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": [
+                {"name": "idb_list", "description": "List running IDAs"},
+                {"name": "idb_select", "description": "Pin session to IDA"},
+            ]
+        },
+    }
+    merged = _merge_tools_list(remote, local)
+    names = [t["name"] for t in merged["result"]["tools"]]
+    assert names == ["decompile", "list_funcs", "idb_list", "idb_select"]
+
+
+def test_merge_dedupes_collisions():
+    """If both sides expose the same name, the IDA-side schema wins."""
+    remote = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": [{"name": "shared_tool", "description": "from IDA"}]
+        },
+    }
+    local = {
+        "result": {
+            "tools": [{"name": "shared_tool", "description": "from proxy"}]
+        }
+    }
+    merged = _merge_tools_list(remote, local)
+    tools = merged["result"]["tools"]
+    assert len(tools) == 1
+    assert tools[0]["description"] == "from IDA"
+
+
+def test_merge_handles_remote_failure_gracefully():
+    """A non-dict remote (e.g. error) still yields proxy-local tools."""
+    local = {"result": {"tools": [{"name": "idb_list"}]}}
+    merged = _merge_tools_list(None, local)
+    assert [t["name"] for t in merged["result"]["tools"]] == ["idb_list"]
+
+
+def test_merge_preserves_envelope_fields_from_remote():
+    """jsonrpc/id come from the remote response when present."""
+    remote = {"jsonrpc": "2.0", "id": 7, "result": {"tools": []}}
+    local = {"jsonrpc": "2.0", "id": 7, "result": {"tools": [{"name": "idb_list"}]}}
+    merged = _merge_tools_list(remote, local)
+    assert merged.get("jsonrpc") == "2.0"
+    assert merged.get("id") == 7
+
 
 
 def _fake_instance(**overrides):

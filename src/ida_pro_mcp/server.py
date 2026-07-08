@@ -57,6 +57,7 @@ except ImportError:
         sys.path.pop(0)
 
 try:
+    from . import routing as _routing  # expose as server.routing for tests
     from .routing import (
         SessionTargets,
         list_instances_to_response,
@@ -64,12 +65,17 @@ try:
         select_target,
     )
 except ImportError:
+    import routing as _routing  # type: ignore[no-redef]
     from routing import (  # type: ignore[no-redef]
         SessionTargets,
         list_instances_to_response,
         forward_json_rpc,
         select_target,
     )
+
+# Expose the routing module under the proxy's namespace so tests can shrink
+# ``RECOVERY_TIMEOUT_SEC`` for fast feedback without re-importing.
+routing = _routing
 
 DEFAULT_IDA_HOST = "127.0.0.1"
 DEFAULT_IDA_PORT = 13337
@@ -204,6 +210,12 @@ def _register_proxy_local_tools() -> None:
     handler — we rely on ``dispatch_proxy`` to detect these names and route
     them to the local handlers instead of forwarding to an IDA.
     """
+    # Register under the public ``idb_*`` names, not the underscored impl
+    # names — the agent only sees what the registry exposes.
+    _idb_list_impl.__name__ = "idb_list"
+    _idb_list_impl.__qualname__ = "idb_list"
+    _idb_select_impl.__name__ = "idb_select"
+    _idb_select_impl.__qualname__ = "idb_select"
     mcp.tool(_idb_list_impl)
     mcp.tool(_idb_select_impl)
 
@@ -211,10 +223,44 @@ def _register_proxy_local_tools() -> None:
 _register_proxy_local_tools()
 
 
+def _merge_tools_list(remote: dict | None, local: dict | None) -> dict:
+    """Combine ``tools/list`` responses from the IDA and proxy-local registries.
+
+    Tools from the IDA win when both sides expose the same name (so the IDA's
+    schema is the source of truth, but the merge still keeps any proxy-local
+    tool that doesn't collide). The merged response keeps the JSON-RPC envelope
+    intact when present, falls back to a bare tools list otherwise.
+    """
+    remote_tools = []
+    if isinstance(remote, dict):
+        result = remote.get("result") if isinstance(remote.get("result"), dict) else {}
+        remote_tools = list(result.get("tools", []) or [])
+    local_tools = []
+    if isinstance(local, dict):
+        result = local.get("result") if isinstance(local.get("result"), dict) else {}
+        local_tools = list(result.get("tools", []) or [])
+
+    seen = {t.get("name") for t in remote_tools if isinstance(t, dict)}
+    for tool in local_tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("name") in seen:
+            continue
+        remote_tools.append(tool)
+        seen.add(tool.get("name"))
+
+    base = remote if isinstance(remote, dict) else {}
+    return {**base, "result": {"tools": remote_tools}}
+
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Dispatch JSON-RPC requests.
 
     - ``initialize`` / notifications  → original handler (handled locally).
+    - ``tools/list`` → forward to the targeted IDA, then merge in the
+      proxy-local tools (``idb_list``, ``idb_select``) so the agent sees
+      both. If the IDA is unreachable, still return the local tools so the
+      agent can discover what's available via ``idb_list``.
     - ``tools/call`` for ``idb_list`` / ``idb_select`` → local handlers.
     - everything else → forward to the current session's targeted IDA,
       waiting up to 30 s on connection-refused in case the IDA is restarting.
@@ -234,6 +280,20 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         tool_name = params.get("name") if isinstance(params, dict) else None
         if tool_name in _PROXY_LOCAL_TOOLS:
             return dispatch_original(request)
+
+    if request_obj["method"] == "tools/list":
+        local = dispatch_original(request)
+        host, port, _ = _resolve_session_target()
+        try:
+            remote = _proxy_to_ida(request, host, port)
+        except Exception:
+            # IDA unreachable: still surface the proxy-local tools so the
+            # agent can recover via idb_list once an IDA comes back up.
+            return local
+        merged = _merge_tools_list(remote, local)
+        if isinstance(local, dict) and "id" not in merged:
+            merged["id"] = local.get("id")
+        return JsonRpcResponse(merged) if isinstance(merged, dict) else None
 
     host, port, idb_path = _resolve_session_target()
     try:
