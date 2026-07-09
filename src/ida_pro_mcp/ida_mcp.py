@@ -5,6 +5,7 @@ It loads the actual implementation from the ida_mcp package.
 """
 
 import sys
+import threading
 import idaapi
 import ida_kernwin
 import ida_netnode
@@ -110,25 +111,23 @@ CONFIG_ACTION_LABEL = "MCP Configuration"
 
 
 class MCPConfigForm(idaapi.Form):
-    """Form to configure MCP server host and port."""
+    """Form to configure MCP server."""
 
-    def __init__(self, host: str, port: int, autostart: bool, persist: bool):
+    def __init__(self, host: str, autostart: bool):
         form_str = r"""STARTITEM 0
 MCP Server Configuration
 
+Dispatcher port: 13337 (fixed)
 <Host:{host}>
-<Port:{port}>
-<Autostart server when IDA opens:{autostart}>
-<Save host and port to this database:{save_endpoint}>{checks}>
+<Autostart server when IDA opens:{autostart}>{checks}>
 """
         super().__init__(
             form_str,
             {
                 "host": idaapi.Form.StringInput(value=host),
-                "port": idaapi.Form.NumericInput(value=port, tp=idaapi.Form.FT_DEC),
                 "checks": idaapi.Form.ChkGroupControl(
-                    ("autostart", "save_endpoint"),
-                    value=(1 if autostart else 0) | (2 if persist else 0),
+                    ("autostart",),
+                    value=1 if autostart else 0,
                 ),
             },
         )
@@ -141,16 +140,9 @@ class MCPConfigHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         old_host = self.plugin.host
-        old_port = self.plugin.port
         old_autostart = self.plugin.autostart
-        old_persist = self.plugin.persist_endpoint
 
-        form = MCPConfigForm(
-            self.plugin.host,
-            self.plugin.port,
-            self.plugin.autostart,
-            self.plugin.persist_endpoint,
-        )
+        form = MCPConfigForm(self.plugin.host, self.plugin.autostart)
         form.Compile()
         ok = form.Execute()
         if ok != 1:
@@ -158,47 +150,27 @@ class MCPConfigHandler(idaapi.action_handler_t):
             return 0
 
         host = form.host.value
-        port = form.port.value
         autostart = bool(form.checks.value & 1)
-        persist = bool(form.checks.value & 2)
         form.Free()
 
-        if port < 1 or port > 65535:
-            print(f"[MCP] Invalid port: {port}")
-            return 0
+        host_changed = host != old_host
 
         if autostart != old_autostart:
             self.plugin.autostart = autostart
             _set_autostart(autostart)
             print(f"[MCP] Autostart {'enabled' if autostart else 'disabled'}")
 
-        if persist != old_persist:
-            self.plugin.persist_endpoint = persist
-            _set_persist(persist)
-            print(f"[MCP] Save host/port {'enabled' if persist else 'disabled'}")
-
-        endpoint_changed = host != old_host or port != old_port
-        self.plugin.host = host
-        self.plugin.port = port
-
-        # Save or forget the endpoint based on the preference.
-        if persist:
+        if host_changed:
+            self.plugin.host = host
             _set_host(host)
-            _set_port(port)
-            if endpoint_changed or persist != old_persist:
-                print(f"[MCP] Configuration updated: {host}:{port} (saved to IDB)")
-        else:
-            if persist != old_persist:
-                _clear_endpoint()  # next load falls back to defaults
-            if endpoint_changed:
-                print(f"[MCP] Configuration updated: {host}:{port} (not saved)")
+            print(f"[MCP] Host updated: {host}")
 
-        if not endpoint_changed and autostart == old_autostart and persist == old_persist:
-            print(f"[MCP] Configuration unchanged: {host}:{port}")
+        if not host_changed and autostart == old_autostart:
+            print(f"[MCP] Configuration unchanged: {host}")
             return 1
 
-        # Apply new endpoint immediately if the server is running.
-        if endpoint_changed and self.plugin.mcp is not None:
+        # Apply new host immediately if the server is running.
+        if host_changed and self.plugin.mcp is not None:
             print("[MCP] Applying configuration change without manual restart...")
             self.plugin.run(0)
         return 1
@@ -235,7 +207,7 @@ class MCP(idaapi.plugin_t):
     wanted_hotkey = "Ctrl-Alt-M"
 
     DEFAULT_HOST = "127.0.0.1"
-    DEFAULT_PORT = 13337
+    DEFAULT_PORT = 13337  # dispatcher port
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -243,14 +215,16 @@ class MCP(idaapi.plugin_t):
             hotkey = hotkey.replace("Alt", "Option")
 
         self.mcp: "ida_mcp.rpc.McpServer | None" = None
+        self.dispatcher = None  # Dispatcher instance if this is the dispatcher
+        self._promotion_stop = threading.Event()
+        self._promotion_thread: threading.Thread | None = None
+        self._registered_project_port: int | None = None
         self.autostart = _get_autostart()
         self.persist_endpoint = _get_persist()
-        if self.persist_endpoint:
-            self.host = _get_host(self.DEFAULT_HOST)
-            self.port = _get_port(self.DEFAULT_PORT)
-        else:
-            self.host = self.DEFAULT_HOST
-            self.port = self.DEFAULT_PORT
+        self.host = self.DEFAULT_HOST
+        # Always use DEFAULT_PORT (13337) for dispatcher logic.
+        # Persisted port is ignored — the architecture requires 13337 = dispatcher.
+        self.port = self.DEFAULT_PORT
 
         if self.autostart and ida_kernwin.is_idaq():
             print(f"[MCP] v{_PLUGIN_VERSION} loaded, server will start automatically")
@@ -275,6 +249,25 @@ class MCP(idaapi.plugin_t):
 
         return idaapi.PLUGIN_KEEP
 
+    def _get_project_name(self) -> str:
+        """Get the current IDB project name."""
+        try:
+            import ida_nalt
+            import os
+            binary = ida_nalt.get_root_filename() or ""
+            if binary:
+                return os.path.splitext(os.path.basename(binary))[0]
+        except Exception:
+            pass
+        return "unknown"
+
+    def _get_idb_path(self) -> str:
+        try:
+            import idc
+            return idc.get_idb_path() or ""
+        except Exception:
+            return ""
+
     def _unregister_instance(self):
         port = getattr(self, "_registered_port", None)
         if port is not None:
@@ -288,37 +281,159 @@ class MCP(idaapi.plugin_t):
                 print(f"[MCP] Instance unregistration failed: {e}")
             self._registered_port = None
 
+    def _unregister_project(self):
+        port = getattr(self, "_registered_project_port", None)
+        if port is not None:
+            try:
+                if TYPE_CHECKING:
+                    from .ida_mcp.project_registry import unregister_project
+                else:
+                    from ida_mcp.project_registry import unregister_project
+                unregister_project(port)
+            except Exception as e:
+                print(f"[MCP] Project unregistration failed: {e}")
+            self._registered_project_port = None
+
     def run(self, arg):
+        # Stop everything
+        self._stop_promotion()
+        if self.dispatcher:
+            self.dispatcher.stop()
+            self.dispatcher = None
         if self.mcp:
             self._unregister_instance()
+            self._unregister_project()
             self.mcp.stop()
             self.mcp = None
 
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
+
+        # Try to become dispatcher on DEFAULT_PORT (13337)
+        try:
+            if TYPE_CHECKING:
+                from .ida_mcp.dispatcher import Dispatcher
+            else:
+                from ida_mcp.dispatcher import Dispatcher
+
+            self.dispatcher = Dispatcher(self.host, self._get_idb_path())
+            if self.dispatcher.start():
+                print(f"[MCP] v{_PLUGIN_VERSION} dispatcher on http://{self.host}:{self.DEFAULT_PORT}")
+                # Start own worker on next port
+                self._start_worker(self.DEFAULT_PORT + 1)
+                self._start_promotion()
+                return
+            else:
+                self.dispatcher = None
+        except Exception as e:
+            print(f"[MCP] Dispatcher start failed: {e}")
+            self.dispatcher = None
+
+        # Port 13337 occupied — start as worker
+        self._start_worker(self.DEFAULT_PORT + 1)
+        self._start_promotion()
+
+    def _start_worker(self, start_port: int):
+        """Start the worker MCP server starting from start_port."""
         if TYPE_CHECKING:
             from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
         else:
             from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 
-        port = self.port
-        max_port = port + 100
+        port = start_port
+        max_port = self.DEFAULT_PORT + 100
         while port < max_port:
             try:
                 MCP_SERVER.serve(
                     self.host, port, request_handler=IdaMcpHttpRequestHandler
                 )
-                print(f"[MCP] v{_PLUGIN_VERSION} server listening on http://{self.host}:{port}")
+                role = "dispatcher-worker" if self.dispatcher else "worker"
+                print(f"[MCP] v{_PLUGIN_VERSION} {role} on http://{self.host}:{port}")
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 self._register_instance(port)
+                # Register in project registry
+                try:
+                    if TYPE_CHECKING:
+                        from .ida_mcp.project_registry import register_project
+                    else:
+                        from ida_mcp.project_registry import register_project
+                    project_name = self._get_project_name()
+                    file_path = register_project(project_name, port)
+                    self._registered_project_port = port
+                    print(f"[MCP] Registered project: {project_name} (:{port})")
+                    print(f"  Project file: {file_path}")
+                except Exception as e:
+                    print(f"[MCP] Project registration failed: {e}")
                 return
             except OSError as e:
                 if e.errno in (48, 98, 10048):  # Address already in use
                     port += 1
                 else:
                     raise
-        print(f"[MCP] Error: No available port in range {self.port}-{max_port - 1}")
+        print(f"[MCP] Error: No available port in range {start_port}-{max_port - 1}")
+
+    def _start_promotion(self):
+        """Start background thread that tries to claim dispatcher port."""
+        self._promotion_stop.clear()
+        self._promotion_thread = threading.Thread(
+            target=self._promotion_loop, daemon=True, name="mcp-promotion"
+        )
+        self._promotion_thread.start()
+
+    def _stop_promotion(self):
+        self._promotion_stop.set()
+        if self._promotion_thread:
+            self._promotion_thread.join(timeout=7)
+            self._promotion_thread = None
+
+    def _promotion_loop(self):
+        """Every 5s, try to bind dispatcher port. If successful, promote."""
+        import socket
+        while not self._promotion_stop.is_set():
+            self._promotion_stop.wait(5)
+            if self._promotion_stop.is_set():
+                break
+            if self.dispatcher is not None:
+                continue  # Already dispatcher
+            # Try to bind dispatcher port
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.host, self.DEFAULT_PORT))
+                sock.close()
+            except OSError:
+                continue  # Port still occupied
+            # Port is free — promote
+            print("[MCP] Dispatcher port free, promoting to dispatcher...", flush=True)
+            try:
+                if TYPE_CHECKING:
+                    from .ida_mcp.dispatcher import Dispatcher
+                else:
+                    from ida_mcp.dispatcher import Dispatcher
+
+                # Stop current worker
+                if self.mcp:
+                    self._unregister_instance()
+                    self._unregister_project()
+                    self.mcp.stop()
+                    self.mcp = None
+
+                # Start dispatcher
+                self.dispatcher = Dispatcher(self.host, self._get_idb_path())
+                if self.dispatcher.start():
+                    print(f"[MCP] Promoted to dispatcher on http://{self.host}:{self.DEFAULT_PORT}")
+                    # Restart worker
+                    self._start_worker(self.DEFAULT_PORT + 1)
+                else:
+                    print("[MCP] Dispatcher bind failed, staying as worker")
+                    self.dispatcher = None
+                    # Restart worker on same port
+                    self._start_worker(self.DEFAULT_PORT + 1)
+            except Exception as e:
+                print(f"[MCP] Promotion failed: {e}")
+                self.dispatcher = None
+                self._start_worker(self.DEFAULT_PORT + 1)
 
     def _register_instance(self, port: int):
         try:
@@ -327,10 +442,13 @@ class MCP(idaapi.plugin_t):
             else:
                 from ida_mcp.discovery import register_instance
             import os
-            import idc
-            import ida_nalt
-            binary = ida_nalt.get_root_filename() or ""
-            idb_path = idc.get_idb_path() or ""
+            binary = ""
+            idb_path = self._get_idb_path()
+            try:
+                import ida_nalt
+                binary = ida_nalt.get_root_filename() or ""
+            except Exception:
+                pass
             file_path = register_instance(
                 host=self.host,
                 port=port,
@@ -343,13 +461,18 @@ class MCP(idaapi.plugin_t):
             print(f"  Discovery file: {file_path}")
         except Exception as e:
             import traceback
-            print(f"[MCP] Instance registration failed: {e}")
+            print(f"[MCP] Instance unregistration failed: {e}")
             traceback.print_exc()
 
     def term(self):
         if hasattr(self, "_ui_hooks"):
             self._ui_hooks.unhook()
         ida_kernwin.unregister_action(CONFIG_ACTION_ID)
+        self._stop_promotion()
+        if self.dispatcher:
+            self.dispatcher.stop()
+            self.dispatcher = None
+        self._unregister_project()
         self._unregister_instance()
         if self.mcp:
             self.mcp.stop()
