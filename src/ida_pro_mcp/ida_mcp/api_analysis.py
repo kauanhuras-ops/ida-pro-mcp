@@ -828,35 +828,23 @@ def disasm(
             func_name = "<no function>"
             header_addr = start
 
-        lines: list[dict] = []
+        raw_lines: list[str] = []
         seen = 0
         total_count = 0
         more = False
+        insn_count = 0
 
         def _maybe_add(ea: int) -> bool:
-            nonlocal seen, total_count, more
+            nonlocal seen, total_count, more, insn_count
             if include_total:
                 total_count += 1
             if seen < offset:
                 seen += 1
                 return True
-            if len(lines) < max_instructions:
+            if insn_count < max_instructions:
                 line = ida_lines.generate_disasm_line(ea, 0)
-                instruction = ida_lines.tag_remove(line) if line else ""
-                entry: dict = {
-                    "addr": f"{ea:x}",
-                    "instruction": compact_whitespace(instruction),
-                }
-                name = ida_name.get_ea_name(ea)
-                if name:
-                    entry["label"] = name
-                comments = _collect_line_comments(ea)
-                if comments:
-                    entry["comments"] = comments
-                refs = _collect_line_refs(ea)
-                if refs:
-                    entry["refs"] = refs
-                lines.append(entry)
+                raw_lines.append(ida_lines.tag_remove(line) if line else "")
+                insn_count += 1
                 seen += 1
                 return True
             more = True
@@ -903,12 +891,54 @@ def disasm(
                     ]
             stack_frame = get_stack_frame_variables_internal(func.start_ea, False)
 
+        # Additional function metadata
+        func_size = func.size() if func else None
+        basic_blocks = None
+        callees: list[str] = []
+        str_refs: list[str] = []
+
+        if func:
+            # Basic block count
+            fblocks = list(idaapi.FlowChart(func))
+            basic_blocks = len(fblocks)
+
+            # Callees: unique function names called by this function
+            seen_callees: set[int] = set()
+            for item_ea in idautils.FuncItems(func.start_ea):
+                for target in idautils.CodeRefsFrom(item_ea, 0):
+                    if target != idaapi.BADADDR and target not in seen_callees:
+                        seen_callees.add(target)
+                        callee_name = ida_name.get_ea_name(target)
+                        if callee_name:
+                            callees.append(callee_name)
+
+            # String references
+            seen_strs: set[int] = set()
+            for item_ea in idautils.FuncItems(func.start_ea):
+                for dref in idautils.DataRefsFrom(item_ea):
+                    if dref != idaapi.BADADDR and dref not in seen_strs:
+                        seen_strs.add(dref)
+                        s = ida_bytes.get_strlit_contents(dref, -1, 0)
+                        if s:
+                            try:
+                                str_refs.append(s.decode("utf-8", errors="replace"))
+                            except Exception:
+                                pass
+
         out: DisassemblyFunction = {
             "name": func_name,
             "start_ea": hex(header_addr),
             "segment": segment_name,
-            "lines": lines,
+            "lines": "\n".join(raw_lines),
         }
+        if func_size is not None:
+            out["size"] = func_size
+        if basic_blocks is not None:
+            out["basic_blocks"] = basic_blocks
+        if callees:
+            out["callees"] = callees
+        if str_refs:
+            out["strings"] = str_refs
         if stack_frame:
             out["stack_frame"] = stack_frame
         if rettype:
@@ -919,7 +949,7 @@ def disasm(
         return {
             "addr": addr,
             "asm": out,
-            "instruction_count": len(lines),
+            "instruction_count": insn_count,
             "total_instructions": total_count if include_total else None,
             "cursor": ({"next": offset + max_instructions} if more else {"done": True}),
         }

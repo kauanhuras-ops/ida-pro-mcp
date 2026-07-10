@@ -541,10 +541,14 @@ class DisassemblyFunction(TypedDict):
     name: str
     start_ea: str
     segment: NotRequired[str]
+    lines: str
+    size: NotRequired[int]
+    basic_blocks: NotRequired[int]
+    callees: NotRequired[list[str]]
+    strings: NotRequired[list[str]]
     return_type: NotRequired[str]
     arguments: NotRequired[list[Argument]]
     stack_frame: NotRequired[list[StackFrameVariable]]
-    lines: list[DisassemblyLine]
 
 
 class Xref(TypedDict):
