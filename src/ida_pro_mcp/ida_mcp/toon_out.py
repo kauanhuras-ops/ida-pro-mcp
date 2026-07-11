@@ -1,10 +1,19 @@
 """TOON encoding for model-facing tool result text.
 
-The MCP ``structuredContent`` field stays JSON (required by the MCP spec); only
-the ``content[].text`` blocks the model actually reads are encoded as TOON
-(Token-Oriented Object Notation) to cut token usage on tabular results such as
-function/xref lists. Set ``IDA_MCP_OUTPUT_FORMAT=json`` to opt out globally and
-keep the original compact JSON text.
+In TOON mode, analysis tools re-render ``content[].text`` as TOON (Token-
+Oriented Object Notation) to cut token usage on tabular results such as
+function/xref lists, and **drop** ``structuredContent``. Some clients (e.g.
+Claude Code) read ``structuredContent`` over ``content[].text``; keeping the
+JSON ``structuredContent`` would bypass TOON entirely, so it is removed for
+analysis tools and the client falls back to the TOON text.
+
+Management tools (``TOON_EXEMPT_TOOLS``: health, idb switching, format
+switching) are exempt: they keep ``structuredContent`` and compact JSON text
+even in TOON mode, forming a stable JSON control plane. This lets strict
+clients (e.g. Pi Agent, which validates ``outputSchema -> structuredContent``)
+probe health and call ``set_output_format('json')`` up front, after which their
+analysis calls come back as JSON. Set ``IDA_MCP_OUTPUT_FORMAT=json`` to opt out
+globally and keep JSON everywhere.
 
 Per-session overrides
 ---------------------
@@ -101,7 +110,34 @@ def resolve_use_toon() -> bool:
     return TOON_ENABLED
 
 
-def to_llm_text(obj: Any) -> str:
+# Management/control tools are always served as JSON — structuredContent kept,
+# text not TOON-encoded — even when the session is in TOON mode. They form a
+# stable JSON control plane so strict clients (e.g. Pi Agent, which validates
+# outputSchema -> structuredContent) can probe health and flip the session to
+# JSON via ``set_output_format('json')`` before issuing analysis calls.
+# Analysis tools follow the session's TOON/JSON preference.
+TOON_EXEMPT_TOOLS = frozenset({
+    "server_health",
+    "idb_open",
+    "idb_list",
+    "idb_select",
+    "idb_current",
+    "set_output_format",
+    "get_output_format",
+})
+
+
+def should_toon(name: str | None) -> bool:
+    """Whether the tool ``name`` should be TOON-encoded for this session.
+
+    Management tools are exempt: they keep ``structuredContent`` and compact
+    JSON text regardless of the session format, so strict clients can always
+    parse control responses. All other tools follow the session preference.
+    """
+    return resolve_use_toon() and name not in TOON_EXEMPT_TOOLS
+
+
+def to_llm_text(obj: Any, force_json: bool = False) -> str:
     """Serialize a tool result for the model-facing text content.
 
     Encoding decision is per-session (``resolve_use_toon()``), not the global
@@ -109,9 +145,10 @@ def to_llm_text(obj: Any) -> str:
     not get TOON encoded text on the oversized branch. Dicts and lists go to
     TOON when the session allows it; everything else falls back to compact
     JSON. Any encoder error also falls back to JSON, so tool output never
-    breaks because of formatting.
+    breaks because of formatting. ``force_json`` overrides the session check
+    (used for management tools that are exempt from TOON even in TOON mode).
     """
-    if resolve_use_toon() and isinstance(obj, (dict, list)):
+    if not force_json and resolve_use_toon() and isinstance(obj, (dict, list)):
         try:
             import toon_py
 
@@ -119,3 +156,23 @@ def to_llm_text(obj: Any) -> str:
         except Exception:
             pass
     return json.dumps(obj, separators=(",", ":"))
+
+
+def mode_info() -> dict:
+    """Return the output-mode fields for health/inspection endpoints.
+
+    ``mode`` is the session's effective format (``'toon'`` or ``'json'``).
+    When TOON is active, a prominent ``!important`` field explains how to
+    toggle it, so clients reading the always-JSON health response know how to
+    opt out (e.g. Pi Agent switching to JSON for structured-output validation).
+    """
+    mode = "toon" if resolve_use_toon() else "json"
+    info: dict = {"mode": mode}
+    if mode == "toon":
+        info["!important"] = (
+            "Analysis tool output is TOON (compact, non-JSON). "
+            "Switch this session to JSON with set_output_format('json'), "
+            "revert to the server default with set_output_format('auto'), or "
+            "disable globally via the IDA_MCP_OUTPUT_FORMAT=json env var."
+        )
+    return info

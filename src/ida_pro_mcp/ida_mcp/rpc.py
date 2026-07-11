@@ -8,7 +8,7 @@ from .zeromcp import (
     McpHttpRequestHandler,
     get_current_request_external_base_url,
 )
-from .toon_out import resolve_use_toon, to_llm_text
+from .toon_out import should_toon, to_llm_text
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
@@ -127,14 +127,17 @@ def _install_tools_call_patch() -> None:
             return response
 
         serialized = json.dumps(structured)
+        use_toon = should_toon(name)
         if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
-            if resolve_use_toon():
-                # Re-render the model-facing text as TOON. structuredContent
-                # is preserved so MCP clients that validate outputSchema ->
-                # structuredContent (e.g. Pi Agent) don't reject the response.
-                # The model still reads content[].text; clients that want
-                # structured data read structuredContent.
+            if use_toon:
+                # TOON for analysis tools: re-render the model-facing text as
+                # TOON and drop structuredContent. Clients that prefer
+                # structuredContent (e.g. Claude Code) then fall back to
+                # content[].text and the model actually sees TOON. Management
+                # tools (should_toon False) skip this and stay JSON so strict
+                # clients can always parse control responses.
                 _toon_rewrite_content(response.get("content", []))
+                response.pop("structuredContent", None)
             return response
 
         output_id = _generate_output_id()
@@ -145,7 +148,7 @@ def _install_tools_call_patch() -> None:
 
         content = [{
             "type": "text",
-            "text": to_llm_text(preview),
+            "text": to_llm_text(preview, force_json=not use_toon),
         }, {
             "type": "text",
             "text": download_meta["download_hint"],
@@ -156,7 +159,7 @@ def _install_tools_call_patch() -> None:
             "isError": False,
             "_meta": {"ida_mcp": download_meta},
         }
-        if not resolve_use_toon():
+        if not use_toon:
             result["structuredContent"] = preview
         return result
 

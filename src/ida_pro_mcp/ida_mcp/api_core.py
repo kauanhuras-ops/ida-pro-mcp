@@ -46,18 +46,28 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
-class ServerHealthResult(TypedDict):
-    status: str
-    version: str
-    uptime_sec: float
-    idb_path: str | None
-    module: str
-    input_path: str
-    imagebase: str
-    auto_analysis_ready: bool | None
-    hexrays_ready: bool
-    strings_cache_ready: bool
-    strings_cache_size: int
+ServerHealthResult = TypedDict(
+    "ServerHealthResult",
+    {
+        "status": str,
+        "version": str,
+        "uptime_sec": float,
+        "idb_path": str | None,
+        "module": str,
+        "input_path": str,
+        "imagebase": str,
+        "auto_analysis_ready": bool | None,
+        "hexrays_ready": bool,
+        "strings_cache_ready": bool,
+        "strings_cache_size": int,
+        "mode": str,
+        # "!important" is not a valid Python identifier, so the TypedDict is
+        # declared in functional form. It is only present when mode == "toon",
+        # carrying the toggle instructions. Kept in the schema (NotRequired) so
+        # strict clients validating structuredContent accept it.
+        "!important": NotRequired[str],
+    },
+)
 
 
 class ServerWarmupStep(TypedDict, total=False):
@@ -361,6 +371,8 @@ def _build_health_payload() -> dict:
     except Exception:
         idb_path = None
 
+    from .toon_out import mode_info
+
     return {
         "status": "ok",
         "version": get_server_version(),
@@ -373,6 +385,7 @@ def _build_health_payload() -> dict:
         "hexrays_ready": hexrays_ready,
         "strings_cache_ready": _strings_cache is not None,
         "strings_cache_size": len(_strings_cache) if _strings_cache is not None else 0,
+        **mode_info(),
     }
 
 
