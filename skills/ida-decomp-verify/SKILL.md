@@ -5,6 +5,13 @@ description: Find and fix places where Hex-Rays decompiler output is WRONG or mi
 
 # Decomp-verify — the bytes win
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 Hex-Rays output is a hypothesis built on guessed prototypes, types, and stack layout. This skill is
 the disciplined diff between that hypothesis and the disassembly, and the fix for each disagreement.
 When pseudocode and disassembly disagree, the disassembly is right.

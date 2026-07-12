@@ -5,6 +5,13 @@ description: IDA Pro Python scripting for reverse engineering. Use when writing 
 
 # IDAPython
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 Use modern `ida_*` modules. Avoid legacy `idc` module.
 
 ## Module Router

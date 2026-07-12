@@ -5,6 +5,13 @@ description: Confirm a function's calling convention, argument count/types, and 
 
 # Calling convention & return type — confirm from the bytes
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 A prototype is a claim about the ABI contract. Confirm every part of it against the disassembly before
 `set_type`. This is the step that makes every caller render correctly, so getting it right pays off
 across the whole database.

@@ -5,6 +5,13 @@ description: Deep, complete workup of a SINGLE function over IDA Pro MCP — fro
 
 # Function recon — one function to fixpoint
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 Convert a single function into a fully named, typed, verified unit. The steps below look sequential,
 but in practice you **interleave reading and writing**: understand one thing, commit it, understand
 the next. Do not run Steps 1–2 as a long read and save all the writes for Steps 3–4. The output of

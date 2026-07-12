@@ -5,6 +5,13 @@ description: Master workflow for productive reverse engineering of an IDA Pro da
 
 # RE Methodology — the IDB Swiss-army knife
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 The goal of a session is a database where **every reachable function, parameter, global, and
 structure is named and correctly typed, and every calling convention and return type is confirmed
 against the disassembly**. This skill is the router and the discipline; the focused skills below do
@@ -39,9 +46,12 @@ decomp.me works by writing C, compiling it, and diffing the produced assembly ag
 until they match byte-for-byte. You can't compile here, but you adopt the same loop against IDA's
 own output:
 
-1. **Disassembly is ground truth. Decompiler output is a hypothesis.** Hex-Rays guesses conventions,
-   argument counts, signedness, struct layout, and stack usage. Every guess it makes is a claim you
-   verify against the instructions. When they disagree, the bytes win — see `ida-decomp-verify`.
+1. **Disassembly is ground truth. Decompiler output AND existing comments are hypotheses.** Hex-Rays
+   guesses conventions, argument counts, signedness, struct layout, and stack usage — and silently
+   breaks. Pre-existing comments (from prior passes, other tools, or the original author) are just as
+   untrustworthy: stale, wrong, or misleading. Never take either as fact; every claim is verified
+   against the instructions you read yourself. When they disagree, the bytes win — see
+   `ida-decomp-verify`.
 2. **Iterate to a fixpoint.** One pass never converges. Name a callee → its callers' pseudocode
    changes → new names become obvious → re-decompile. Keep looping a function (and its neighbours)
    until a pass produces no new information. `force_recompile` after every type/name change that

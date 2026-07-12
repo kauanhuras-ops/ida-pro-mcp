@@ -5,6 +5,13 @@ description: Analyze and cluster GROUPS of related functions over IDA Pro MCP �
 
 # Cluster analysis — subsystems, not single functions
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 A cluster is a set of functions that belong together: a call tree under one root, everything that
 touches one global/struct, or a family sharing a string/import theme (all the `SSL_*` callers, all
 the crypto). Analyze the cluster as a unit so shared types and names propagate across it at once.

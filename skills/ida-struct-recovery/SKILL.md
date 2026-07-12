@@ -5,6 +5,13 @@ description: Recover C structs, classes, vtables, and unions from disassembly ov
 
 # Struct recovery — from `*(a1 + 0x18)` to `a1->count`
 
+> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
+> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
+> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
+> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
+> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
+> disagrees with the disassembly, the disassembly wins — every time.
+
 A struct is proven by how code accesses memory through a base pointer. Read the accesses, derive the
 layout, declare the type, apply it, and the pointer arithmetic collapses into named fields everywhere.
 

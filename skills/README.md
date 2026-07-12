@@ -5,6 +5,10 @@ disassembly-verified state over MCP. The discipline is borrowed from decomp.me-s
 recompilation: **disassembly is ground truth, decompiler output is a hypothesis, iterate to a
 fixpoint, and confirm every claim against the bytes.**
 
+> ⚠️ **Trust only the disassembly, and your own eyes.** Comments lie; the decompiler guesses, errs,
+> and silently breaks; the disassembly is the bytes the CPU runs and never lies. Every skill opens
+> with this rule — when pseudocode or a comment disagrees with the disasm, the disasm wins.
+
 Skills auto-load from this directory (`skills/<name>/SKILL.md`). Start with `ida-re-methodology`; it
 routes to the rest.
 
