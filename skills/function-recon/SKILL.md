@@ -5,22 +5,27 @@ description: Deep, complete workup of a SINGLE function over IDA Pro MCP — fro
 
 # Function recon — one function to fixpoint
 
-Convert a single function into a fully named, typed, verified unit. Loop until a pass yields nothing new.
+Convert a single function into a fully named, typed, verified unit. The steps below look sequential,
+but in practice you **interleave reading and writing**: understand one thing, commit it, understand
+the next. Do not run Steps 1–2 as a long read and save all the writes for Steps 3–4. The output of
+this skill is IDB edits, not a mental model — if a pass over the function produced no rename, type,
+or comment, you either finished it or you over-analyzed.
 
-## Step 1 — Read everything (no mutation yet)
+## Step 1 — One briefing read, then start committing
 
 ```
 analyze_function(addr, include_asm=false)   # pseudocode + strings + constants + callers + callees + xrefs
 ```
-This one call is your briefing. Read it before doing anything. Then, when you need the ground truth:
+This one call is your briefing — it's enough to start writing. Pull ground truth *as you need it for a
+specific claim*, not all up front:
 ```
 decompile(addr)          # current Hex-Rays hypothesis
 disasm(addr)             # ground truth; paginate with offset/max_instructions for big funcs
 stack_frame(addr)        # current stack layout & sizes
 ```
-
-Form a first-pass mental model: What are the inputs (registers/stack at entry)? What does it return
-(see `calling-convention`)? What does it call, and in what pattern (loop? error path? state machine)?
+As you read, **write immediately**: the moment you understand a local, `rename` it; the moment you
+grasp a block, drop a `set_comments` there. Don't finish reading the whole function before the first
+edit. The mental model is a byproduct; the committed names/types/comments are the goal.
 
 ## Step 2 — Identify the function
 
@@ -110,3 +115,6 @@ function is done. Otherwise loop from Step 2 on whatever the pass surfaced.
 - **Signed vs unsigned** — decided by `jl/jg` (signed) vs `jb/ja` (unsigned) and `movsx` vs `movzx` in
   `disasm`/`insn_query`, not by the decompiler's default.
 - **Renaming on a guess** — if you can't cite the evidence, comment it with `?` instead.
+- **Reading without writing** — if you've read the whole function and made zero edits, you're hoarding
+  findings in your head. Commit them now (names, types, or at minimum comments); understanding that
+  isn't in the IDB doesn't count.

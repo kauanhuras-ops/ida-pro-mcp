@@ -40,7 +40,13 @@ search_structs(pattern="...")                  # is this struct already partiall
 type_inspect({ queries:[{ name:"Config", include_members:true }] })
 ```
 
-## Step 3 — Declare the type
+**Declare early and incrementally — don't wait for a complete layout.** As soon as you have two or
+three confirmed fields, `declare_type` the partial struct (rest as `gapN`) and apply it. A partial
+struct in the IDB immediately improves pseudocode and is real progress; a "complete" struct you're
+still holding in your head is not. Each newly confirmed field is a re-`declare_type` commit, not a
+note for a final big declaration.
+
+## Step 3 — Declare the type (partial is fine, commit it)
 
 ```
 declare_type(decls=[

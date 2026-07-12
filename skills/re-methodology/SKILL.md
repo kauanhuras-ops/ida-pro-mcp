@@ -10,6 +10,29 @@ structure is named and correctly typed, and every calling convention and return 
 against the disassembly**. This skill is the router and the discipline; the focused skills below do
 the deep work.
 
+## Prime directive: write to the IDB after every step, not at the end
+
+The deliverable is **the modified database**, not your explanation of it. Analysis that lives only in
+your reasoning is lost work — invisible to the next pass, the next agent, and the user. So:
+
+- **Every step ends with a mutation.** The moment you understand *anything* — what a variable holds,
+  what a function does, what a field is — commit it right then: `rename`, `set_type`, `set_comments`.
+  Do not read three functions and then think; read one thing, write what you learned, move on.
+- **Comments are the cheapest commit — use them constantly.** Understood one line but not the whole
+  function? Drop a `set_comments` at that address *now*. Don't hold the insight in your head hoping to
+  write a tidy summary later; you'll lose half of it.
+- **Bias to action over exposition.** A turn that produced pages of reasoning and zero IDB changes is
+  a failed turn (unless the function was already fully done). If you've been reading for more than a
+  step without writing anything back, stop and commit what you already know.
+- **Batch within a step, never across steps.** Group the mutations of *one* step into one call (all
+  the locals you just decoded → one `rename`), but never defer a step's writes to a later "cleanup"
+  pass. Small, frequent commits beat one big one.
+- **Talk less, in the chat too.** Keep prose to a one-line note of what you just committed and what's
+  next. The IDB edits are the progress; narrate them, don't replace them.
+
+Rule of thumb: **understanding : mutations should trend 1:1.** Each thing you figure out should leave
+a mark in the database in the same step you figured it out.
+
 ## The recompilation mindset (from decomp.me)
 
 decomp.me works by writing C, compiling it, and diffing the produced assembly against the target
@@ -45,9 +68,15 @@ own output:
 
 ## Session loop
 
+The loop is short and tight, and **it turns over many times per function** — each turn commits
+something. It is not "one big read, then one big write."
+
 ```
-survey  →  pick target  →  recon  →  hypothesize  →  verify vs disasm  →  commit (name/type/comment)  →  propagate  →  repeat
+one cheap recon call  →  [ understand one thing → COMMIT it (name/type/comment) ] × many  →  propagate  →  next target
 ```
+
+The inner bracket is the whole game: a micro-cycle of understand-one-thing-then-write-it that repeats
+until the function is done. Never let the bracket run more than once without a mutation.
 
 ### 0. Orient (once per session)
 - `server_health` — confirm an IDB is loaded and ready.
@@ -65,16 +94,21 @@ survey  →  pick target  →  recon  →  hypothesize  →  verify vs disasm  �
 | Decompiler output looks wrong | **decomp-verify** | `disasm`, `decompile`, `insn_query` |
 | Confirm convention/return type | **calling-convention** | `disasm`, `insn_query`, `set_type` |
 
-### 2. Recon before touching anything
-Read-first. `analyze_function` (single) or `analyze_component` (group) gives pseudocode + strings +
-constants + callers + callees + xrefs in one call. Cheap, high-signal, no mutation. Never rename or
-retype before you've read the disassembly of the thing you're about to change.
+### 2. One recon call, then start writing
+Take *one* cheap, high-signal read: `analyze_function` (single) or `analyze_component` (group) gives
+pseudocode + strings + constants + callers + callees + xrefs at once. That is enough context to begin
+committing — do **not** keep reading more functions "for context" before you've written anything back.
+The one rule that gates a write: confirm the specific claim against the disassembly of the thing
+you're changing (a name needs its evidence, a type needs its access width). Verify *that one claim*,
+commit it, then verify the next.
 
-### 3. Hypothesize → verify → commit
-For each claim (name, prototype, struct field, convention), find its evidence in the disassembly,
-then commit it with the mutating tool. Batch commits: `rename`, `set_type`/`type_apply_batch`,
-`set_comments`, `declare_stack`. Use `diff_before_after` when you want to *see* the pseudocode
-change a rename/type causes in the same call.
+### 3. Commit continuously as you understand
+Every claim you confirm (a variable's meaning, a name, a type, a prototype, a struct field) is written
+immediately with `rename` / `set_type` / `type_apply_batch` / `set_comments` / `declare_stack`. Batch
+the writes that belong to the *same* moment of understanding into one call; don't accumulate findings
+across the whole function to dump at the end. Use `diff_before_after` to *see* the pseudocode improve
+as you commit — that visible improvement is the signal you're on track. If you've decoded a line but
+can't fully name the function yet, the finding still gets written — as a comment, now.
 
 ### 4. Propagate and re-check
 After any prototype/type/struct change, `force_recompile` the function and its callers, then
@@ -92,6 +126,9 @@ re-read. A change that doesn't visibly improve a caller is suspect — re-examin
 
 ## Non-negotiable rules
 
+- **Commit after every step; the IDB is the deliverable.** Never accumulate understanding across
+  functions and defer the writes. If a step produced insight but no `rename`/`set_type`/`set_comments`,
+  it isn't finished. A comment is always available as the minimum write.
 - **Never hand-convert hex/dec/signedness** — use `int_convert`. Off-by-a-conversion corrupts types.
 - **Address anything by name once named** — tools accept `main` as readily as `0x401000`. Rename
   early so later calls are readable and stable across rebases.

@@ -67,6 +67,11 @@ Inspect what the exit path leaves in the return register:
 
 ## Step 4 — Apply and confirm propagation
 
+Commit your best confirmed prototype **now** — don't wait to perfect every argument first. Set the
+return type and the args you've confirmed, `force_recompile`, and let the improved pseudocode guide
+the rest; refine with another `set_type` as each remaining arg is nailed down. A committed
+approximate-but-correct prototype beats a perfect one still forming in your head.
+
 ```
 set_type({ addr, signature: "int __fastcall parse(Ctx *this, const char *s, int len)" })
 force_recompile(addr)

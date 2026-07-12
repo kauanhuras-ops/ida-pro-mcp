@@ -49,12 +49,18 @@ This is the cluster analog of `analyze_function`. Read it for:
 - **Shared strings/constants** — protocol tags, opcodes, error codes → often a shared enum.
 - **Entry/exit functions** — where the subsystem is called from and what it calls out to.
 
-## Step 3 — Name the cluster's shared vocabulary first
+## Step 3 — Name the cluster's shared vocabulary first (and write it down as you go)
 
-Before touching individual functions, fix what they all share — it propagates everywhere at once:
+Before touching individual functions, fix what they all share — it propagates everywhere at once. Each
+of these is a *commit*, made the moment you identify it, not notes for later:
 1. **The shared struct/context** → `struct-recovery`, then it renders in every member function.
 2. **The shared enum/opcodes** → `enum_upsert` once; apply across the cluster.
 3. **The shared globals** → `rename` + `set_type`/`make_data` once each.
+
+Even while still mapping the cluster, commit as you learn: name each function the instant its role is
+clear (one `rename` batch), and comment the cluster's entry points with what they do. Don't spend a
+whole turn producing a call-graph description with zero IDB edits — the map should be laid down *in*
+the database (names + comments), not just in your reasoning.
 
 Then `force_recompile` the whole cluster (batch the addrs) and re-read `analyze_component`.
 

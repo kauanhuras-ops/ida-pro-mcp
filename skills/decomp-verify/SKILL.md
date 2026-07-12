@@ -22,6 +22,11 @@ anything where:
 - a pseudocode element (argument, cast, variable) has **no** basis in `disasm` (invented), or
 - the **width/sign** of an operation differs between the two.
 
+**Fix and record as you go, not at the end.** Don't compile a long list of discrepancies and then act.
+The instant you confirm one, either apply its fix (below) or, if it's genuinely a decompiler
+limitation, `set_comments` the correct reading at that address right then. Each discrepancy resolved
+is one commit; the verification pass should leave a trail of edits behind it, not a report.
+
 `insn_query` is your scalpel for targeted checks across the function:
 ```
 insn_query({ queries:[{ mnem:"call", func: addr }] })     # every call — check arg setup per site

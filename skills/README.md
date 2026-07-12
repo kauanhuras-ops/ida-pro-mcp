@@ -41,6 +41,12 @@ earlier name, type, prototype, convention, or struct field, it is fixed *immedia
 re-`force_recompile`d — never deferred. A stale error propagates into every downstream pass, so
 correcting upstream mistakes on sight is part of the task, not cleanup for later.
 
+**The deliverable is the modified database, not an explanation of it.** Every skill is action-first:
+understand one thing, write it to the IDB (`rename` / `set_type` / `set_comments`) in the same step,
+then move on. Comments are the cheapest commit and are always available. Analysis that never becomes
+an IDB edit is lost work — a turn that produced lots of reasoning and zero database changes (on a
+function that wasn't already done) is a failed turn.
+
 ### Companion skill
 
 `idapython/` documents the underlying IDAPython API (`ida_*` modules, `idautils`) for when a task
