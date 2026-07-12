@@ -61,6 +61,68 @@ uv run "C:\Program Files\IDA Professional 9.3\idalib\python\py-activate-idalib.p
 uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
 ```
 
+## Analysis Skills (Swiss-army knife)
+
+The `skills/` directory ships a set of model-invoked analysis playbooks (see
+[`skills/README.md`](skills/README.md)): `re-methodology` (master workflow),
+`function-recon`, `cluster-analysis`, `struct-recovery`, `decomp-verify`, and
+`calling-convention`. They encode decomp.me-style discipline — disassembly is ground truth, iterate
+to a fixpoint, name and type everything, confirm conventions/return types from the bytes, and fix
+upstream mistakes on sight. Each `SKILL.md` has a `description` that lets the model auto-load it when
+relevant.
+
+### Claude Code
+
+`skills/` uses the **plugin skills** layout, so the simplest route is the plugin install above — once
+`ida-pro-mcp@mrexodia` is enabled, the skills load automatically (namespaced, e.g.
+`/ida-pro:re-methodology`) in every session, regardless of your working directory. On a fork/branch,
+point a marketplace at your own repo (`claude plugin marketplace add <you>/<repo>`) to pick up new
+skills before they land upstream.
+
+To use them **without** the plugin (or to develop them), install as **personal skills** — available
+across all projects, auto-loaded by description:
+
+```bash
+# macOS/Linux: symlink each skill dir into your personal skills folder
+mkdir -p ~/.claude/skills
+for d in re-methodology function-recon cluster-analysis struct-recovery decomp-verify calling-convention; do
+  ln -sfn "$(pwd)/skills/$d" ~/.claude/skills/"$d"
+done
+```
+
+```powershell
+# Windows (PowerShell): symlink (or use Copy-Item to copy instead)
+mkdir "$env:USERPROFILE\.claude\skills" -Force
+foreach ($d in "re-methodology","function-recon","cluster-analysis","struct-recovery","decomp-verify","calling-convention") {
+  New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\$d" -Target "$PWD\skills\$d" -Force
+}
+```
+
+Symlinks are supported and edits are picked up live; a brand-new top-level `~/.claude/skills`
+directory requires a Claude Code restart the first time. For a single project only, use
+`.claude/skills/` in that project instead of `~/.claude/skills/`.
+
+### Codex
+
+Codex has no on-demand skill mechanism; it reads `AGENTS.md` (project, and global at
+`~/.codex/AGENTS.md`). Bridge the skills by adding a pointer so Codex reads the relevant `SKILL.md`
+on demand instead of loading all of them every turn. Add this to your analysis workspace's
+`AGENTS.md` (or the global one), pointing at wherever this repo is checked out:
+
+```md
+## IDA analysis skills
+Before reverse-engineering work over the IDA Pro MCP tools, read the relevant playbook under
+`<path-to>/ida-pro-mcp/skills/`:
+- `re-methodology/SKILL.md` — start here: overall workflow and routing
+- `function-recon/SKILL.md` — analyze/type a single function
+- `cluster-analysis/SKILL.md` — analyze/cluster groups of functions
+- `struct-recovery/SKILL.md` — reconstruct structs/classes/vtables
+- `decomp-verify/SKILL.md` — find decompiler errors vs disassembly
+- `calling-convention/SKILL.md` — confirm convention/args/return from the bytes
+Follow their discipline: disassembly is ground truth; name and type everything; fix upstream
+mistakes immediately.
+```
+
 ## Installation (GUI)
 
 **Note**: the MCP plugin is no longer recommended and will eventually be deprecated. Use `idalib-mcp` instead.
