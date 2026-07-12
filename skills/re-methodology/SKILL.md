@@ -33,6 +33,15 @@ own output:
 5. **Leave a trail.** Every confirmed fact becomes a rename, a type, or a comment in the IDB so the
    next pass (and the next agent) starts from it. Uncertainty becomes a `?`-prefixed comment, not a
    silent guess baked into a name.
+6. **Fix-on-sight — correct upstream mistakes immediately.** The moment new evidence contradicts an
+   *earlier* commit — a callee you named `init` is clearly a destructor, a prototype you set drops an
+   argument the current call site proves exists, a struct field's width is wrong, a convention was
+   misjudged — **stop and fix it now**, then `force_recompile` the affected functions. Never leave a
+   known-wrong name/type/convention in the IDB "to clean up later": every downstream pass builds on
+   it, so a stale error propagates and multiplies. A correction is not a detour from the current task
+   — it *is* the task, because the whole database must stay internally consistent. If a fix would be
+   large or risky, do the minimal correct thing now (retype/rename/`?`-comment) rather than deferring
+   the whole thing.
 
 ## Session loop
 
@@ -91,6 +100,9 @@ re-read. A change that doesn't visibly improve a caller is suspect — re-examin
   before committing a big batch.
 - **`?` for uncertainty.** If confidence < high, encode it: comment `? guessed: recv loop` rather
   than renaming to `recv_loop` as if confirmed. A wrong confident name costs more than no name.
+- **Fix upstream errors on sight, never defer them.** When current work reveals an earlier
+  name/type/prototype/convention/struct is wrong, correct it immediately and `force_recompile` — do
+  not add it to a "TODO later" list. Stale errors propagate into every downstream pass.
 - **Debugger tools are unsafe** and out of scope for static passes; only use `dbg_*` when the user
   wants dynamic confirmation.
 

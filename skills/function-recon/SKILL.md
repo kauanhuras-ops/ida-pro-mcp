@@ -89,6 +89,13 @@ set_comments({ items:[{addr, comment:"parse_config: reads KEY=VALUE lines into C
 Then propagate: `force_recompile` on each caller (`xref_query direction:"to"`), re-read them — your
 new prototype/name usually makes several callers instantly clearer, seeding the next targets.
 
+**Fix-on-sight.** While working this function you will often prove an *earlier* commit wrong — a
+callee you named last pass is clearly something else now that you see how it's used here, or a
+prototype you set drops an argument this call site sets up. Fix it the instant you see it:
+`rename`/`set_type` the offending symbol and `force_recompile` it and its neighbours. Do **not**
+note it for later — the wrong name/type is actively corrupting the pseudocode you're reading right
+now, and every function above it inherits the error.
+
 ## Fixpoint check
 
 Re-run `analyze_function(addr)`. If a full pass produced **no** new name, type, or comment, this

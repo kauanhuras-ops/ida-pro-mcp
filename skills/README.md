@@ -36,6 +36,11 @@ every **calling convention and return type is confirmed against the disassembly*
 unverified Hex-Rays guess. Uncertainty is recorded as a `?`-hedged comment, never baked into a
 confident name.
 
+And the database stays **internally consistent at all times**: the moment current work disproves an
+earlier name, type, prototype, convention, or struct field, it is fixed *immediately* and
+re-`force_recompile`d — never deferred. A stale error propagates into every downstream pass, so
+correcting upstream mistakes on sight is part of the task, not cleanup for later.
+
 ### Companion skill
 
 `idapython/` documents the underlying IDAPython API (`ida_*` modules, `idautils`) for when a task

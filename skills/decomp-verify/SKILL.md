@@ -77,6 +77,12 @@ For each confirmed discrepancy:
 5. If pseudocode still disagrees with unchanged disassembly, your fix was wrong — revert the claim and
    re-derive. Never "fix" by renaming to hide the confusion.
 
+Very often the root cause lives in **another** function: the discrepancy here is produced by a wrong
+prototype, type, or convention you (or a previous pass) committed on a callee/caller. When that's the
+case, **fix that upstream symbol immediately** — retype/rename it and `force_recompile` it — rather
+than patching a local symptom or noting it for later. The whole point of verification is to remove
+the error at its source; a deferred upstream fix just re-breaks the next function that touches it.
+
 ## Distinguish decompiler bug from your mistake
 
 - A genuine Hex-Rays limitation (rare) is stable across recompiles and matches disasm only under a

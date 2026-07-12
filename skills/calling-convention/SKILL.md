@@ -79,6 +79,13 @@ xref_query({ addr, direction:"to", include_fn:true })   # every caller
 If a caller now shows a mismatched or dropped argument, your count/convention is still wrong — return
 to Step 1 at that call site (the setup instructions before the `call` are ground truth).
 
+**Fix-on-sight, in both directions.** Confirming this prototype frequently exposes that a *previously
+set* prototype was wrong — the callee whose args you're reading here was typed incorrectly last pass,
+or a caller's convention no longer fits what you now see. Correct that other symbol immediately
+(`set_type` + `force_recompile`), don't just work around it locally. A wrong convention/return type
+silently scrambles arguments in every caller, so a stale one is one of the most corrosive errors to
+leave in the database — never defer it.
+
 ## Confidence rules
 
 - Convention/return set from disassembly = high confidence; commit it.

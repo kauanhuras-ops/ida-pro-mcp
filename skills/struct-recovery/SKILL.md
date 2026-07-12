@@ -66,6 +66,13 @@ set_op_type({ items:[{ addr:insnEA, op_n:1, kind:"stroff", struct:"Config", delt
 Re-read `decompile`. `*(a1 + 0x18)` should now read `a1->count`. If it doesn't, the offset/size in
 your declaration disagrees with the access width — fix the declaration, not the code.
 
+**Fix-on-sight — a struct is never "finished".** A later function will access an offset you marked as
+a gap, or contradict a field's width/sign/type you already declared. The instant that happens, edit
+the struct with `declare_type` (re-declare the corrected layout) and `force_recompile` every owner —
+do not leave the wrong field in place. Because the type is shared, one wrong field mis-renders the
+struct in *every* member function at once, so the cost of deferring the fix scales with the size of
+the cluster. Correct the layout the moment new evidence lands, then keep going.
+
 ## Step 5 — C++ vtables and classes
 
 1. A struct whose **offset 0 is a pointer to an array of code pointers** is a polymorphic object; that

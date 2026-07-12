@@ -66,6 +66,12 @@ improves the rendering of everything above it, so roots get easier as you climb.
 - Batch the mechanical parts across the whole cluster: one `rename` call for all func names, one
   `type_apply_batch` for all prototypes you're confident about.
 - Re-`callgraph` / re-`analyze_component` after each layer to pick up propagated improvements.
+- **Fix-on-sight across the cluster.** Climbing toward the roots routinely disproves an earlier
+  member's name, prototype, or the shared struct/enum — a "callback" leaf turns out to be a
+  comparator, a shared field you typed as `int` is dereferenced as a pointer two layers up. Correct
+  it immediately (retype the struct once, `type_apply_batch` the prototype, `rename` the func) and
+  re-`force_recompile` the cluster, *then* continue upward. A stale error in a leaf is amplified by
+  every function above it, so deferring it makes the roots harder, not easier.
 
 ## Step 5 — Clustering when the grouping isn't given
 
