@@ -1,6 +1,6 @@
 ---
-name: function-recon
-description: Deep, complete workup of a SINGLE function over IDA Pro MCP — from sub_XXXX to fully named, typed, and disassembly-verified. Use when the user points at one function ("what does sub_401000 do", "clean up this function", "type this properly"). Covers the recon→hypothesize→verify→commit→propagate loop, renaming locals/stack/globals, setting the prototype, and confirming every claim against the bytes. For convention/return-type specifics see calling-convention; for struct fields see struct-recovery; for pseudocode-vs-asm mismatches see decomp-verify.
+name: ida-function-recon
+description: Deep, complete workup of a SINGLE function over IDA Pro MCP — from sub_XXXX to fully named, typed, and disassembly-verified. Use when the user points at one function ("what does sub_401000 do", "clean up this function", "type this properly"). Covers the recon→hypothesize→verify→commit→propagate loop, renaming locals/stack/globals, setting the prototype, and confirming every claim against the bytes. For convention/return-type specifics see ida-calling-convention; for struct fields see ida-struct-recovery; for pseudocode-vs-asm mismatches see ida-decomp-verify.
 ---
 
 # Function recon — one function to fixpoint
@@ -49,7 +49,7 @@ rename({ func: { addr, name: "parse_config" } })
 
 The prototype is the highest-leverage edit: it fixes rendering in *every* caller.
 
-1. Confirm the **calling convention** and **return type** from disassembly — see `calling-convention`.
+1. Confirm the **calling convention** and **return type** from disassembly — see `ida-calling-convention`.
    Don't accept Hex-Rays' guessed `__fastcall`/`int` blindly.
 2. Confirm **argument count and types** from how each incoming register/stack slot is used before
    first write (width of access = size; sign of compare = signedness; dereference = pointer).
@@ -72,7 +72,7 @@ Work top-down through the pseudocode, turning noise into meaning. Batch aggressi
 - **Globals** touched: `rename({ data:[{old,new}] })`, and type them with `make_data` or `set_type`.
 - **Magic constants → enums/flags**: create the enum once with `enum_upsert`, then render the operand
   with `set_op_type({ items:[{addr, op_n, kind:"stroff"/"offset", ...}] })` or apply the enum type.
-- **Struct accesses** (`*(a1 + 0x18)`): stop and go to `struct-recovery`; then `set_op_type` with
+- **Struct accesses** (`*(a1 + 0x18)`): stop and go to `ida-struct-recovery`; then `set_op_type` with
   `kind:"stroff"` to make the operand render as `a1->field`.
 
 After each meaningful batch: `force_recompile(addr)` and re-read. Names/types you just set should
@@ -82,7 +82,7 @@ collapse several lines of noise into one readable statement.
 
 - Diff a rename/type live to confirm impact: `diff_before_after(addr, action, action_args)`.
 - Walk the disassembly once more (`disasm`) and check the pseudocode accounts for every branch, every
-  call, and every memory access. Unexplained `disasm` lines = a decompiler gap → `decomp-verify`.
+  call, and every memory access. Unexplained `disasm` lines = a decompiler gap → `ida-decomp-verify`.
 - Confirm no `__int64`/`_QWORD`/`_DWORD` placeholders remain where a real type is known.
 - Basic-block sanity for gnarly control flow: `basic_blocks(addr)`.
 

@@ -1,6 +1,6 @@
 ---
-name: calling-convention
-description: Confirm a function's calling convention, argument count/types, and return type from the DISASSEMBLY over IDA Pro MCP, instead of trusting Hex-Rays' guess. Use when setting a prototype, when arguments render wrong, when the return type is unclear, or as the mandatory confirmation step before committing any function signature. Covers reading argument registers/stack by ABI, detecting return-value width from the exit path, spotting variadic/struct-return/thiscall, and applying the confirmed prototype. Feeds function-recon (prototype step) and decomp-verify (phantom-argument fixes).
+name: ida-calling-convention
+description: Confirm a function's calling convention, argument count/types, and return type from the DISASSEMBLY over IDA Pro MCP, instead of trusting Hex-Rays' guess. Use when setting a prototype, when arguments render wrong, when the return type is unclear, or as the mandatory confirmation step before committing any function signature. Covers reading argument registers/stack by ABI, detecting return-value width from the exit path, spotting variadic/struct-return/thiscall, and applying the confirmed prototype. Feeds ida-function-recon (prototype step) and ida-decomp-verify (phantom-argument fixes).
 ---
 
 # Calling convention & return type — confirm from the bytes
@@ -38,7 +38,7 @@ insn_query({ queries:[{ mnem:"mov", func: addr }] })   # scan reg/stack setup wi
   **dereferenced** (pointer → recurse), **sign-extended** (`movsx` ⇒ signed), or **passed straight to a
   known API** (inherit that parameter's type).
 - **`this` pointer**: if the first integer arg is dereferenced at many constant offsets, it's a
-  context/`this` (→ `struct-recovery`); on x86 in `ecx` it's `__thiscall`.
+  context/`this` (→ `ida-struct-recovery`); on x86 in `ecx` it's `__thiscall`.
 
 ## Step 2 — Determine the return type
 
@@ -55,7 +55,7 @@ Inspect what the exit path leaves in the return register:
   return type is a struct, and every subsequent argument is off by one. This is a classic phantom-arg
   cause — check for it.
 - **`__noreturn`**: function never returns (ends in `int3`, `ud2`, or a tail-call to abort/exit with no
-  epilogue). Mark it — a wrong noreturn silently drops code in callers (→ `decomp-verify`).
+  epilogue). Mark it — a wrong noreturn silently drops code in callers (→ `ida-decomp-verify`).
 
 ## Step 3 — Detect the convention and specials
 

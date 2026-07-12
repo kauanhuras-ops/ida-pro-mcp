@@ -1,6 +1,6 @@
 ---
-name: decomp-verify
-description: Find and fix places where Hex-Rays decompiler output is WRONG or misleading by cross-checking pseudocode against the ground-truth disassembly over IDA Pro MCP. Use when pseudocode looks suspicious (phantom/missing arguments, __int64 everywhere, weird casts, dropped code, wrong signedness, bogus control flow), or as a QA pass before trusting a function. Covers the systematic disasm-vs-pseudocode diff, the catalogue of common Hex-Rays failure modes and their fixes, and confirming the fix re-decompiles clean. Uses the same evidence as calling-convention and struct-recovery.
+name: ida-decomp-verify
+description: Find and fix places where Hex-Rays decompiler output is WRONG or misleading by cross-checking pseudocode against the ground-truth disassembly over IDA Pro MCP. Use when pseudocode looks suspicious (phantom/missing arguments, __int64 everywhere, weird casts, dropped code, wrong signedness, bogus control flow), or as a QA pass before trusting a function. Covers the systematic disasm-vs-pseudocode diff, the catalogue of common Hex-Rays failure modes and their fixes, and confirming the fix re-decompiles clean. Uses the same evidence as ida-calling-convention and ida-struct-recovery.
 ---
 
 # Decomp-verify — the bytes win
@@ -38,7 +38,7 @@ insn_query({ queries:[{ mnem:"movsx", func: addr }] })    # sign-extensions the 
 **Phantom or missing arguments.** Pseudocode shows `f(a, b, c)` but disasm sets only `rcx, rdx`; or
 shows `f(a)` but disasm also loads `r8`. → Wrong prototype on the callee. Confirm the real arg count
 from register/stack setup at the call site, then `set_type` the callee's signature and
-`force_recompile` both. See `calling-convention`.
+`force_recompile` both. See `ida-calling-convention`.
 
 **`__int64` / `_QWORD` / `_DWORD` soup.** These are "unknown", not real types. → Type the variable
 from its access width and use. Usually collapses to `int`, a pointer, or a struct field once typed.
@@ -54,7 +54,7 @@ wrong `__noreturn` attribute on a callee, or a bad function boundary. Fix the ca
 
 **Bogus casts / stack noise.** `*(_DWORD *)((char *)&v1 + 4)` and `HIDWORD(x)` everywhere. → Wrong
 stack-variable sizes or a struct that should be declared. Fix the stack layout (`declare_stack`) or
-recover the struct (`struct-recovery`).
+recover the struct (`ida-struct-recovery`).
 
 **Wrong control flow / jumptable.** Pseudocode `switch` has wrong/missing cases, or a loop is
 mis-shaped. → Compare with `basic_blocks`; a mis-recovered jump table needs the table/operand typed
@@ -65,7 +65,7 @@ neighbour, or a function runs past its real end. → `define_func` to create the
 bounds; `undefine` bad data-as-code (or `define_code` raw bytes that should be code).
 
 **Call through wrong convention.** Args look scrambled (right values, wrong parameters). → The callee's
-convention is misdetected; confirm and set it (`calling-convention`).
+convention is misdetected; confirm and set it (`ida-calling-convention`).
 
 **Uninitialized-looking variable used before set.** Often a register live across a call that Hex-Rays
 lost. → Check `disasm`; may need a prototype fix on the intervening call (clobber/return info).
@@ -75,7 +75,7 @@ lost. → Check `disasm`; may need a prototype fix on the intervening call (clob
 For each confirmed discrepancy:
 1. Establish the ground truth from `disasm`/`insn_query` (width, sign, arg count, target, bounds).
 2. Apply the minimal fix: prototype (`set_type`), type (`type_apply_batch`), struct
-   (`struct-recovery`), stack (`declare_stack`), bounds (`define_func`/`undefine`), or operand
+   (`ida-struct-recovery`), stack (`declare_stack`), bounds (`define_func`/`undefine`), or operand
    (`set_op_type`).
 3. `force_recompile(addr)` (and affected callers/callees).
 4. Re-`decompile` and re-diff. The specific discrepancy should be gone and nothing new broken.

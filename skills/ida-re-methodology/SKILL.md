@@ -1,6 +1,6 @@
 ---
-name: re-methodology
-description: Master workflow for productive reverse engineering of an IDA Pro database over MCP. Use at the start of ANY analysis session, or when deciding how to approach a binary, a subsystem, a function, or a cluster. Encodes decomp.me-style recompilation discipline (ground-truth against disassembly, iterate to fixpoint, name+type everything, confirm calling conventions and return types from the bytes). Routes to the focused skills: function-recon, cluster-analysis, struct-recovery, decomp-verify, calling-convention.
+name: ida-re-methodology
+description: Master workflow for productive reverse engineering of an IDA Pro database over MCP. Use at the start of ANY analysis session, or when deciding how to approach a binary, a subsystem, a function, or a cluster. Encodes decomp.me-style recompilation discipline (ground-truth against disassembly, iterate to fixpoint, name+type everything, confirm calling conventions and return types from the bytes). Routes to the focused skills: ida-function-recon, ida-cluster-analysis, ida-struct-recovery, ida-decomp-verify, ida-calling-convention.
 ---
 
 # RE Methodology — the IDB Swiss-army knife
@@ -41,7 +41,7 @@ own output:
 
 1. **Disassembly is ground truth. Decompiler output is a hypothesis.** Hex-Rays guesses conventions,
    argument counts, signedness, struct layout, and stack usage. Every guess it makes is a claim you
-   verify against the instructions. When they disagree, the bytes win — see `decomp-verify`.
+   verify against the instructions. When they disagree, the bytes win — see `ida-decomp-verify`.
 2. **Iterate to a fixpoint.** One pass never converges. Name a callee → its callers' pseudocode
    changes → new names become obvious → re-decompile. Keep looping a function (and its neighbours)
    until a pass produces no new information. `force_recompile` after every type/name change that
@@ -52,7 +52,7 @@ own output:
 4. **Confirm, don't guess.** A rename is a claim ("this is `malloc`"); back it with evidence
    (imports, string, xref pattern, prototype match). A type is a claim; back it with the access
    width and offset seen in disassembly. Convention and return type are claims; confirm from
-   register/stack usage — see `calling-convention`.
+   register/stack usage — see `ida-calling-convention`.
 5. **Leave a trail.** Every confirmed fact becomes a rename, a type, or a comment in the IDB so the
    next pass (and the next agent) starts from it. Uncertainty becomes a `?`-prefixed comment, not a
    silent guess baked into a name.
@@ -88,11 +88,11 @@ until the function is done. Never let the bracket run more than once without a m
 
 | You want to… | Go to | Primary tools |
 |---|---|---|
-| Understand/finish ONE function | **function-recon** | `analyze_function`, `decompile`, `disasm` |
-| Understand a subsystem / group | **cluster-analysis** | `callgraph`, `analyze_component`, `func_query` |
-| Recover a struct/class/vtable | **struct-recovery** | `read_struct`, `declare_type`, `set_op_type` |
-| Decompiler output looks wrong | **decomp-verify** | `disasm`, `decompile`, `insn_query` |
-| Confirm convention/return type | **calling-convention** | `disasm`, `insn_query`, `set_type` |
+| Understand/finish ONE function | **ida-function-recon** | `analyze_function`, `decompile`, `disasm` |
+| Understand a subsystem / group | **ida-cluster-analysis** | `callgraph`, `analyze_component`, `func_query` |
+| Recover a struct/class/vtable | **ida-struct-recovery** | `read_struct`, `declare_type`, `set_op_type` |
+| Decompiler output looks wrong | **ida-decomp-verify** | `disasm`, `decompile`, `insn_query` |
+| Confirm convention/return type | **ida-calling-convention** | `disasm`, `insn_query`, `set_type` |
 
 ### 2. One recon call, then start writing
 Take *one* cheap, high-signal read: `analyze_function` (single) or `analyze_component` (group) gives

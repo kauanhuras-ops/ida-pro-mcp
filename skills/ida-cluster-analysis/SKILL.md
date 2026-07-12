@@ -1,6 +1,6 @@
 ---
-name: cluster-analysis
-description: Analyze and cluster GROUPS of related functions over IDA Pro MCP — subsystems, modules, call trees, or functions sharing a struct/global. Use when the target is bigger than one function ("map out the networking code", "what's this whole call tree do", "group these functions", "find all functions touching g_state"). Covers discovering clusters (by call graph, by shared data, by string/import family), analyzing them together with analyze_component, and driving a group to fully-typed state in dependency order. For each individual function use function-recon; for the shared struct use struct-recovery.
+name: ida-cluster-analysis
+description: Analyze and cluster GROUPS of related functions over IDA Pro MCP — subsystems, modules, call trees, or functions sharing a struct/global. Use when the target is bigger than one function ("map out the networking code", "what's this whole call tree do", "group these functions", "find all functions touching g_state"). Covers discovering clusters (by call graph, by shared data, by string/import family), analyzing them together with analyze_component, and driving a group to fully-typed state in dependency order. For each individual function use ida-function-recon; for the shared struct use ida-struct-recovery.
 ---
 
 # Cluster analysis — subsystems, not single functions
@@ -45,7 +45,7 @@ analyze_component(addrs=[...])   # per-function summaries + INTERNAL call graph 
 This is the cluster analog of `analyze_function`. Read it for:
 - **Internal call graph** — the dependency order you'll process in (leaves → roots).
 - **Shared globals/structs** — the context object threaded through the cluster. This is almost always
-  the single highest-value struct to recover (→ `struct-recovery`).
+  the single highest-value struct to recover (→ `ida-struct-recovery`).
 - **Shared strings/constants** — protocol tags, opcodes, error codes → often a shared enum.
 - **Entry/exit functions** — where the subsystem is called from and what it calls out to.
 
@@ -53,7 +53,7 @@ This is the cluster analog of `analyze_function`. Read it for:
 
 Before touching individual functions, fix what they all share — it propagates everywhere at once. Each
 of these is a *commit*, made the moment you identify it, not notes for later:
-1. **The shared struct/context** → `struct-recovery`, then it renders in every member function.
+1. **The shared struct/context** → `ida-struct-recovery`, then it renders in every member function.
 2. **The shared enum/opcodes** → `enum_upsert` once; apply across the cluster.
 3. **The shared globals** → `rename` + `set_type`/`make_data` once each.
 
@@ -66,7 +66,7 @@ Then `force_recompile` the whole cluster (batch the addrs) and re-read `analyze_
 
 ## Step 4 — Process functions in dependency order
 
-Work **leaves → roots** using the internal call graph. Each leaf you finish (via `function-recon`)
+Work **leaves → roots** using the internal call graph. Each leaf you finish (via `ida-function-recon`)
 improves the rendering of everything above it, so roots get easier as you climb.
 
 - Batch the mechanical parts across the whole cluster: one `rename` call for all func names, one

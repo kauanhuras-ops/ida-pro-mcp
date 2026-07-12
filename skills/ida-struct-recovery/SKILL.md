@@ -1,6 +1,6 @@
 ---
-name: struct-recovery
-description: Recover C structs, classes, vtables, and unions from disassembly over IDA Pro MCP, so that pointer arithmetic (*(a1 + 0x18)) renders as named field access (a1->count). Use whenever pseudocode is full of raw offset dereferences, when a context/this pointer is threaded through functions, or when the user asks to reconstruct a data structure. Covers deriving field offset/size/type from access widths in disasm, declaring the type, applying it, C++ vtable recovery, and verifying the layout round-trips. Pairs with cluster-analysis (find the struct's owners) and function-recon.
+name: ida-struct-recovery
+description: Recover C structs, classes, vtables, and unions from disassembly over IDA Pro MCP, so that pointer arithmetic (*(a1 + 0x18)) renders as named field access (a1->count). Use whenever pseudocode is full of raw offset dereferences, when a context/this pointer is threaded through functions, or when the user asks to reconstruct a data structure. Covers deriving field offset/size/type from access widths in disasm, declaring the type, applying it, C++ vtable recovery, and verifying the layout round-trips. Pairs with ida-cluster-analysis (find the struct's owners) and ida-function-recon.
 ---
 
 # Struct recovery — from `*(a1 + 0x18)` to `a1->count`
@@ -85,7 +85,7 @@ the cluster. Correct the layout the moment new evidence lands, then keep going.
    array is the vtable.
 2. Recover the vtable as its own struct of function pointers: read the pointer array (`get_bytes` /
    `read_struct`), each slot is a method — name them (`Class::method`) and set their prototypes with
-   the object as `this` (first parameter, `__thiscall`/`__fastcall` per `calling-convention`).
+   the object as `this` (first parameter, `__thiscall`/`__fastcall` per `ida-calling-convention`).
 3. Declare `struct Class_vtbl { ret (*method0)(Class *); ... };` and make the object's first field
    `Class_vtbl *vtbl`. Now virtual calls `(*(a1->vtbl->method3))(a1, ...)` render with names.
 4. Constructors write the vtable pointer to offset 0 — use that to find every vtable and its class.
@@ -108,4 +108,4 @@ the cluster. Correct the layout the moment new evidence lands, then keep going.
 - **Packing/alignment** — if declared offsets don't line up with observed ones, the struct is packed
   or has explicit padding; add `char gapN[k]` rather than fighting the compiler's alignment.
 - **Shared struct, one owner named** — after recovery, apply it across ALL owners (see
-  `cluster-analysis`), not just the function you were looking at.
+  `ida-cluster-analysis`), not just the function you were looking at.
