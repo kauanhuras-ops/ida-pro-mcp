@@ -1,115 +1,128 @@
 ---
 name: ida-decomp-verify
-description: Find and fix places where Hex-Rays decompiler output is WRONG or misleading by cross-checking pseudocode against the ground-truth disassembly over IDA Pro MCP. Use when pseudocode looks suspicious (phantom/missing arguments, __int64 everywhere, weird casts, dropped code, wrong signedness, bogus control flow), or as a QA pass before trusting a function. Covers the systematic disasm-vs-pseudocode diff, the catalogue of common Hex-Rays failure modes and their fixes, and confirming the fix re-decompiles clean. Uses the same evidence as ida-calling-convention and ida-struct-recovery.
+description: Check Hex-Rays pseudocode against IDA disassembly and fix the source of supported mismatches when IDB changes are allowed.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-decomp-verify task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current user target and write scope, lists concrete
+            evidence that all applicable Done checks passed, and says no required work
+            remains; or if it states a real blocker that needs user input, approval, or
+            external state and asks a direct question. Return {"ok": false, "reason":
+            "the next concrete work"} for a progress-only report, TODOs, unchecked
+            claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# Decomp-verify — the bytes win
+# Decompiler verification
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-## Set the goal — `/goal`
+Before any IDA or MCP tool call, set the working goal: verify pseudocode for the named
+function in the requested read-only or IDB-write mode; finish when control transfers,
+calls, memory effects, widths, signs, and prototype use agree with checked disassembly.
 
-On entry, pin the objective with the **`/goal`** command, and re-issue it per function verified:
-`/goal verify <func> pseudocode against disasm and fix every discrepancy at its source`.
+Update the working goal for each new function. Keep working until the done checks pass.
+Do not fix the IDB in read-only mode; report the smallest supported fix instead.
 
-Hex-Rays output is a hypothesis built on guessed prototypes, types, and stack layout. This skill is
-the disciplined diff between that hypothesis and the disassembly, and the fix for each disagreement.
-When pseudocode and disassembly disagree, the disassembly is right.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, write scope, checks run, results, and remaining
+work. If required work remains, the hook blocks stopping and returns the next work.
 
-## The diff procedure
+## Evidence rule
 
-```
-decompile(addr)     # the hypothesis
-disasm(addr)        # ground truth (paginate large funcs with offset/max_instructions)
-basic_blocks(addr)  # confirm control-flow shape matches the pseudocode's branches
-```
-Walk them in parallel. For each pseudocode statement, find the instructions that produce it. Flag
-anything where:
-- an instruction/branch/call in `disasm` has **no** counterpart in the pseudocode (dropped code), or
-- a pseudocode element (argument, cast, variable) has **no** basis in `disasm` (invented), or
-- the **width/sign** of an operation differs between the two.
+Pseudocode, current names, types, comments, and even current function bounds are
+hypotheses. Use disassembly and raw bytes as the main static evidence. If decoding or
+code/data boundaries are wrong, repair or account for that before blaming the decompiler.
 
-**Fix and record as you go, not at the end.** Don't compile a long list of discrepancies and then act.
-The instant you confirm one, either apply its fix (below) or, if it's genuinely a decompiler
-limitation, `set_comments` the correct reading at that address right then. Each discrepancy resolved
-is one commit; the verification pass should leave a trail of edits behind it, not a report.
+## 1. Make a semantic comparison
 
-`insn_query` is your scalpel for targeted checks across the function:
-```
-insn_query({ queries:[{ mnem:"call", func: addr }] })     # every call — check arg setup per site
-insn_query({ queries:[{ mnem:"movsx", func: addr }] })    # sign-extensions the decompiler may hide
+```text
+decompile({"addr":"<function>"})
+disasm({"addr":"<function>","offset":0,"max_instructions":5000})
+basic_blocks({"addrs":["<function>"]})
 ```
 
-## Failure-mode catalogue (symptom → cause → fix)
+Compare effects, not one pseudocode line per instruction. Prologues, spills, register
+copies, address calculations, and some optimized work may not have separate C statements.
 
-**Phantom or missing arguments.** Pseudocode shows `f(a, b, c)` but disasm sets only `rcx, rdx`; or
-shows `f(a)` but disasm also loads `r8`. → Wrong prototype on the callee. Confirm the real arg count
-from register/stack setup at the call site, then `set_type` the callee's signature and
-`force_recompile` both. See `ida-calling-convention`.
+Flag a mismatch when it changes meaning:
 
-**`__int64` / `_QWORD` / `_DWORD` soup.** These are "unknown", not real types. → Type the variable
-from its access width and use. Usually collapses to `int`, a pointer, or a struct field once typed.
+- a call, branch, indirect transfer, or side effect is missing;
+- pseudocode shows an argument, value, or path with no instruction basis;
+- an access width or signed operation changes the result;
+- a function boundary or jump target is wrong;
+- a no-return or calling-convention guess removes or changes reachable code.
 
-**Wrong signedness.** Pseudocode uses `unsigned` where the code is signed (or vice-versa). → Check
-`disasm`: `movsx`/`jl`/`jg`/`imul`/`idiv` ⇒ signed; `movzx`/`jb`/`ja`/`mul`/`div` ⇒ unsigned. Retype
-the variable/return.
+Use `insn_query` to find candidates, then read the full local disassembly before deciding:
 
-**Dropped or "optimized-away" code.** A whole block in `disasm` (often error paths, `__noreturn`
-handlers, tail calls, or code after a mis-detected `return`) is absent from pseudocode. → Often a
-wrong `__noreturn` attribute on a callee, or a bad function boundary. Fix the callee's noreturn flag
-(`set_type`/prototype) or the function bounds (`define_func` / `undefine` + redefine), then recompile.
+```text
+insn_query({"queries":[{"func":"<function>","mnem":"call","include_disasm":true}]})
+insn_query({"queries":[{"func":"<function>","mnem":"movsx","include_disasm":true}]})
+```
 
-**Bogus casts / stack noise.** `*(_DWORD *)((char *)&v1 + 4)` and `HIDWORD(x)` everywhere. → Wrong
-stack-variable sizes or a struct that should be declared. Fix the stack layout (`declare_stack`) or
-recover the struct (`ida-struct-recovery`).
+## 2. Find the source
 
-**Wrong control flow / jumptable.** Pseudocode `switch` has wrong/missing cases, or a loop is
-mis-shaped. → Compare with `basic_blocks`; a mis-recovered jump table needs the table/operand typed
-(`set_op_type kind:"offset"`) or the indirect jump's targets fixed. Re-analyze the region.
+| Symptom | Common source | Check |
+|---|---|---|
+| Missing or extra arguments | wrong callee prototype or hidden ABI argument | callee use and several call sites |
+| Raw `__int64`, `_QWORD`, or casts | missing variable, stack, or struct type | access widths and value use |
+| Wrong signed operation | wrong local, parameter, or return type | extending op, compare, division, and caller use |
+| Missing block | wrong no-return fact, bounds, or control-flow recovery | raw bytes, targets, and callee behavior |
+| Stack noise | wrong stack item size or overlapping object | frame offsets and instruction widths |
+| Bad switch | wrong table type, bounds, or indirect targets | table bytes and CFG |
+| Value appears uninitialized | bad call-clobber or prototype model | register life across the call |
 
-**Missing/extra function, or wrong bounds.** Code that should be its own function is inlined into a
-neighbour, or a function runs past its real end. → `define_func` to create the missing function or fix
-bounds; `undefine` bad data-as-code (or `define_code` raw bytes that should be code).
+These are starting points, not automatic fixes. For example, `movsx` proves a signed
+extension at one use; it does not by itself prove the best source-language type.
 
-**Call through wrong convention.** Args look scrambled (right values, wrong parameters). → The callee's
-convention is misdetected; confirm and set it (`ida-calling-convention`).
+## 3. Fix or report one mismatch at a time
 
-**Uninitialized-looking variable used before set.** Often a register live across a call that Hex-Rays
-lost. → Check `disasm`; may need a prototype fix on the intervening call (clobber/return info).
+For each confirmed mismatch:
 
-## The fix loop
+1. State the disassembly fact and the pseudocode result that conflicts with it.
+2. Find the smallest source fact that explains it.
+3. In IDB-write mode, apply only that fix:
+   - `set_type` for a prototype or variable;
+   - **ida-struct-recovery** for a layout;
+   - `declare_stack` for a stack object;
+   - `set_op_type` for a checked operand;
+   - `define_func`, `define_code`, or `undefine` for checked boundary or code/data errors.
+4. Call `force_recompile` for the function and affected callers or callees.
+5. Compare again. The mismatch must be gone without a new semantic mismatch.
 
-For each confirmed discrepancy:
-1. Establish the ground truth from `disasm`/`insn_query` (width, sign, arg count, target, bounds).
-2. Apply the minimal fix: prototype (`set_type`), type (`type_apply_batch`), struct
-   (`ida-struct-recovery`), stack (`declare_stack`), bounds (`define_func`/`undefine`), or operand
-   (`set_op_type`).
-3. `force_recompile(addr)` (and affected callers/callees).
-4. Re-`decompile` and re-diff. The specific discrepancy should be gone and nothing new broken.
-5. If pseudocode still disagrees with unchanged disassembly, your fix was wrong — revert the claim and
-   re-derive. Never "fix" by renaming to hide the confusion.
+Boundary tools can replace IDB analysis items. Use them only when changes are approved and
+raw bytes and targets support the new boundary.
 
-Very often the root cause lives in **another** function: the discrepancy here is produced by a wrong
-prototype, type, or convention you (or a previous pass) committed on a callee/caller. When that's the
-case, **fix that upstream symbol immediately** — retype/rename it and `force_recompile` it — rather
-than patching a local symptom or noting it for later. The whole point of verification is to remove
-the error at its source; a deferred upstream fix just re-breaks the next function that touches it.
+If the source is another function's prototype or type, fix that in-scope source rather
+than adding a local name that hides the problem. In read-only mode, report the source and
+the proposed minimal fix.
 
-## Distinguish decompiler bug from your mistake
+## 4. Record a true decompiler limit
 
-- A genuine Hex-Rays limitation (rare) is stable across recompiles and matches disasm only under a
-  specific reading; document it with a `set_comments` note and, if needed, the correct reading. Don't
-  bake a wrong C into names.
-- Most "decompiler errors" are missing information you haven't supplied yet (types, prototypes, struct,
-  bounds). Supplying it fixes them. Assume this first.
+When checked disassembly has a stable meaning but Hex-Rays still cannot express it:
 
-## Done when
+- state the correct semantic reading;
+- state why types, bounds, and prototypes do not remove the mismatch;
+- in approved write mode, add a short comment at the relevant address;
+- do not use a false C type or name to make pseudocode look cleaner.
 
-Every `disasm` instruction is accounted for in the pseudocode, every pseudocode element traces to real
-instructions, widths/signs/arg-counts agree, and a fresh `force_recompile` + `decompile` reproduces the
-clean output. Then the function is trustworthy enough to build callers on.
+Do not call a case a Hex-Rays bug until bad input facts have been checked.
+
+## Done
+
+Finish only when:
+
+- every behavior-changing call, transfer, branch, and memory effect is represented or
+  explained;
+- argument and return rendering agrees with checked ABI evidence;
+- important widths and signed operations agree;
+- function bounds and jump targets are sound for the checked scope;
+- every approved fix was recompiled and checked again;
+- remaining presentation-only loss or decompiler limits are stated.
+
+A clean-looking decompile alone is not a done check.

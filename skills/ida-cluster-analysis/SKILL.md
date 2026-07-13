@@ -1,124 +1,155 @@
 ---
 name: ida-cluster-analysis
-description: Analyze and cluster GROUPS of related functions over IDA Pro MCP — subsystems, modules, call trees, or functions sharing a struct/global. Use when the target is bigger than one function ("map out the networking code", "what's this whole call tree do", "group these functions", "find all functions touching g_state"). Covers discovering clusters (by call graph, by shared data, by string/import family), analyzing them together with analyze_component, and driving a group to fully-typed state in dependency order. For each individual function use ida-function-recon; for the shared struct use ida-struct-recovery.
+description: Analyze a related group of functions over IDA Pro MCP. Use for a subsystem, call tree, shared-global group, or function family that is larger than one function.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-cluster-analysis task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current user target and write scope, lists concrete
+            evidence that all applicable Done checks passed, and says no required work
+            remains; or if it states a real blocker that needs user input, approval, or
+            external state and asks a direct question. Return {"ok": false, "reason":
+            "the next concrete work"} for a progress-only report, TODOs, unchecked
+            claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# Cluster analysis — subsystems, not single functions
+# Cluster analysis
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-## Set the goal — `/goal`
+Before any IDA or MCP tool call, set the working goal: map the named group in the
+requested read-only or IDB-write mode; finish when members, boundaries, shared data,
+entry and exit paths, and open gaps are checked.
 
-On entry, pin the objective with the **`/goal`** command, and re-issue it as you descend into members:
-`/goal map & type the <name> cluster (leaves→roots), recover its shared struct/enum, name every function`.
+Update the working goal when the member set or target changes. Keep working until the
+done checks pass. Do not rename a group or its members when the request is read-only.
 
-A cluster is a set of functions that belong together: a call tree under one root, everything that
-touches one global/struct, or a family sharing a string/import theme (all the `SSL_*` callers, all
-the crypto). Analyze the cluster as a unit so shared types and names propagate across it at once.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, write scope, checks run, results, and remaining
+work. If required work remains, the hook blocks stopping and returns the next work.
 
-## Step 1 — Discover the cluster
+## Evidence rule
 
-Pick the discovery axis that matches the question:
+Treat call graphs, decompiler output, current names, types, and comments as hypotheses.
+Direct-call graphs miss callbacks and other indirect edges. Check important membership
+and boundary claims in disassembly, registration sites, data xrefs, or approved runtime
+evidence.
 
-**By call graph (a subsystem under a root):**
-```
-callgraph(roots=["main"], max_depth=4)          # bounded call tree; roots + nodes + edges
-callgraph(roots=["recv_packet"], max_depth=6)   # everything a handler reaches
-```
-Read it as a dependency graph. Leaves are primitives (type them first); roots are policy.
+## 1. Build a candidate member set
 
-**By shared data (everything touching one global/struct):**
-```
-xref_query({ addr:"g_state", direction:"to", include_fn:true })   # functions referencing the global
-xrefs_to_field(...)                                               # references to a specific struct field
-```
-The set of referencing functions IS the cluster that owns that data structure.
+Choose the axis that matches the task.
 
-**By theme (string/import family):**
-```
-imports_query({ filter:"*SSL*" })          # then xref each import to its callers
-find(target="socket,connect,bind", kind="refs")
-func_query({ name_regex:"^(enc|dec)rypt" })
+### Calls under a root
+
+```text
+callgraph({"roots":["<root>"],"max_depth":4})
 ```
 
-**By classification:** `survey_binary` already buckets functions (library/thunk/leaf/etc.) and
-summarizes the call graph — use it to spot the big components before drilling in.
+Set a depth and node bound. A common utility called by the group is not always owned by
+the group. An indirect target may be missing.
 
-## Step 2 — Analyze the cluster together
+### Shared data
 
+```text
+xref_query({"queries":[{"addr":"g_state","direction":"to","include_fn":true}]})
+xrefs_to_field({"queries":[{"struct":"State","field":"status"}]})
 ```
-analyze_component(addrs=[...])   # per-function summaries + INTERNAL call graph + SHARED strings/constants/data
+
+Functions that touch the same state are good candidates, but read-only observers and
+generic helpers may sit outside the owner group.
+
+### Shared imports, strings, or names
+
+```text
+imports_query({"queries":[{"filter":"*SSL*"}]})
+find({"type":"string","targets":["socket","connect","bind"]})
+func_query({"queries":[{"name_regex":"^(enc|dec)rypt"}]})
 ```
-This is the cluster analog of `analyze_function`. Read it for:
-- **Internal call graph** — the dependency order you'll process in (leaves → roots).
-- **Shared globals/structs** — the context object threaded through the cluster. This is almost always
-  the single highest-value struct to recover (→ `ida-struct-recovery`).
-- **Shared strings/constants** — protocol tags, opcodes, error codes → often a shared enum.
-- **Entry/exit functions** — where the subsystem is called from and what it calls out to.
 
-## Step 3 — Name the cluster's shared vocabulary first (and write it down as you go)
+Follow xrefs from each result. A shared word is a clue, not proof of ownership.
 
-Before touching individual functions, fix what they all share — it propagates everywhere at once. Each
-of these is a *commit*, made the moment you identify it, not notes for later:
-1. **The shared struct/context** → `ida-struct-recovery`, then it renders in every member function.
-2. **The shared enum/opcodes** → `enum_upsert` once; apply across the cluster.
-3. **The shared globals** → `rename` + `set_type`/`make_data` once each.
+### Address locality
 
-Even while still mapping the cluster, commit as you learn: name each function the instant its role is
-clear (one `rename` batch), and comment the cluster's entry points with what they do. Don't spend a
-whole turn producing a call-graph description with zero IDB edits — the map should be laid down *in*
-the database (names + comments), not just in your reasoning.
+Nearby functions may come from one source unit, but link order, folding, and optimization
+can break that relation. Use locality only as a weak clue.
 
-Then `force_recompile` the whole cluster (batch the addrs) and re-read `analyze_component`.
+## 2. Analyze the group
 
-## Step 4 — Process functions in dependency order
+```text
+analyze_component({"addrs":["<func1>","<func2>","<func3>"]})
+```
 
-Work **leaves → roots** using the internal call graph. Each leaf you finish (via `ida-function-recon`)
-improves the rendering of everything above it, so roots get easier as you climb.
+Record:
 
-- Batch the mechanical parts across the whole cluster: one `rename` call for all func names, one
-  `type_apply_batch` for all prototypes you're confident about.
-- Re-`callgraph` / re-`analyze_component` after each layer to pick up propagated improvements.
-- **Fix-on-sight across the cluster.** Climbing toward the roots routinely disproves an earlier
-  member's name, prototype, or the shared struct/enum — a "callback" leaf turns out to be a
-  comparator, a shared field you typed as `int` is dereferenced as a pointer two layers up. Correct
-  it immediately (retype the struct once, `type_apply_batch` the prototype, `rename` the func) and
-  re-`force_recompile` the cluster, *then* continue upward. A stale error in a leaf is amplified by
-  every function above it, so deferring it makes the roots harder, not easier.
+- internal direct calls;
+- entry functions called from outside;
+- calls and data use outside the group;
+- shared globals, types, strings, and constants;
+- callback registration and indirect dispatch;
+- strong reasons to include or exclude each member.
 
-## Step 5 — Clustering when the grouping isn't given
+Split the set if one part has no meaningful call or data relation to the rest. Add a
+member only with evidence.
 
-If the user wants you to *find* the clusters (not analyze a known one), partition the function list:
+## 3. Set work order
 
-1. `func_query` / `list_funcs` for the population (filter out library/thunk via `survey_binary`
-   classification).
-2. Build the call graph (`callgraph` from entry points, or `callees`/`xref_query` per function).
-3. Group by:
-   - **Connected components / call-tree dominators** — functions only reachable through one root form
-     a module.
-   - **Shared data ownership** — functions sharing the same globals/struct fields (`xref_query`,
-     `xrefs_to_field`) belong together even without direct calls.
-   - **Locality** — consecutive addresses in the same segment are usually the same translation unit.
-   - **Theme** — shared string/import families.
-4. Report the clusters with a name, member list, entry points, and the shared type/global that
-   defines each. Persist the grouping as comments or a naming prefix (e.g. `net_*`, `cfg_*`) so the
-   structure is visible in the IDB.
+Process known leaves before their callers when that improves type propagation. For a
+cycle, callback set, or mutually recursive group, work on the strongly connected group as
+one unit. Do not force every graph into a strict leaves-to-roots order.
 
-## Step 6 — Verify the cluster is coherent
+A useful order is:
 
-- No function in the cluster still shows the shared struct as `*(a1 + N)` — the type should render
-  everywhere (spot-check a few with `decompile`).
-- The internal call graph has no surprise edges into unrelated subsystems (those signal a
-  mis-assigned function — reassign it).
-- Every entry point has a confirmed prototype (callers outside the cluster depend on it).
+1. external boundary prototypes;
+2. common leaf helpers;
+3. shared context types, enums, and globals;
+4. callbacks and indirect targets;
+5. entry and policy functions.
 
-## Output
+Use **ida-function-recon** for each member, **ida-struct-recovery** for shared layouts,
+and **ida-calling-convention** for boundary prototypes.
 
-Deliver: the cluster's purpose, its member functions (named), its entry/exit points, the shared
-struct/enum/globals you recovered, and the dependency order. Leave the IDB with a consistent naming
-prefix per cluster so the partition is legible to the next pass.
+## 4. Record approved changes
+
+In IDB-write mode:
+
+1. Apply a shared type only after its offsets and widths have evidence.
+2. Batch names or prototypes that come from the same checked model.
+3. Call `force_recompile` for affected members.
+4. Run `analyze_component` again and check that calls and shared data still agree.
+
+Do not add a common name prefix only to make the group look clean. Use one when ownership
+is supported and it matches the project's naming style. In read-only mode, give the group
+map in the report and make no IDB change.
+
+If a caller disproves a leaf name, prototype, field, or enum value, fix the in-scope fact
+before using it in higher functions.
+
+## 5. Check boundaries
+
+For each entry or exit edge:
+
+- check the target and call form in disassembly;
+- check the prototype where it affects the boundary;
+- note data passed across the boundary;
+- state whether the other side is owned by this group, a common service, or unknown.
+
+Do not call an edge “unrelated” only because its current name is different.
+
+## Done
+
+Finish only when:
+
+- the member list has a stated reason for each included function;
+- key excluded neighbors and common utilities are stated;
+- entry, exit, direct, callback, and known indirect paths are mapped;
+- shared types, globals, enums, and constants have evidence;
+- each in-scope member meets the needed part of **ida-function-recon**;
+- approved IDB changes were recompiled and checked as a group;
+- unresolved indirect edges, weak members, and missing paths are listed.
+
+The output is a checked group model, not only a call-graph picture.

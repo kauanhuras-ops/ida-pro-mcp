@@ -1,114 +1,186 @@
 ---
 name: ida-dynamic-verify
-description: Confirm hard-to-settle facts by RUNNING the target under IDA's debugger over MCP — real struct sizes, real field layout and accessors, real argument values, real calling convention, real data/decrypted strings, and real indirect-call/vtable targets. Use when static analysis is ambiguous or expensive: a computed allocation size, a phantom-argument dispute, an indirect call you can't resolve, an encrypted blob, or a struct whose true extent you can't derive from disasm alone. Windows/native targets. The debugger EXECUTES the code — UNSAFE, opt-in, malware caution. Every runtime fact is written straight back into the static IDB. Pairs with ida-struct-recovery, ida-calling-convention, and ida-cold-start.
+description: Verify one hard static-analysis claim with the IDA debugger. Use only after explicit approval to execute the target in a suitable environment.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-dynamic-verify task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current target, execution approval, and IDB write
+            scope, lists concrete evidence that all applicable Done checks passed,
+            confirms the debuggee was stopped or was left live by user request, and says
+            no required work remains; or if it states a real blocker that needs user
+            input, approval, or external state and asks a direct question. Return {"ok":
+            false, "reason": "the next concrete work"} for a progress-only report,
+            TODOs, unchecked claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# Dynamic verify — run it to settle what the bytes alone can't
+# Dynamic verification
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-The debugger extends "trust the bytes" to run time: registers and memory at a breakpoint are ground
-truth in the same way instructions are. Use it to **confirm** a static hypothesis, never to replace
-static reading. Static tells you *where* to look; the debugger tells you *what is actually there*.
+Before any IDA or MCP tool call, set the working goal: run the named target to test one
+exact claim, with a stated read-only or IDB-write scope; finish when the observation is
+compared with the hypothesis, address rebasing is checked, and the debuggee is stopped.
 
-## Set the goal — `/goal`
+Update the working goal for a new runtime question. Keep working until the done checks
+pass or an execution, environment, or tool blocker needs user action.
 
-On entry, pin the objective with the **`/goal`** command, and re-issue it per question answered:
-`/goal confirm at runtime: real sizeof(<struct>), real accessors of <ptr>, real args of <func>`.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, execution approval, IDB write scope, checks run,
+results, debuggee state, and remaining work. If required work remains, the hook blocks
+stopping and returns the next work.
 
-> ⚠️ **UNSAFE — running executes the target.** Only debug when the user has opted into dynamic
-> analysis. For unknown/malware samples this runs hostile code; assume network, persistence, and
-> anti-debug. Set every breakpoint **before** `dbg_continue`. Debugger tools are marked unsafe for a
-> reason — one question per run, then `dbg_exit`.
+The working goal does not grant execution approval.
 
-## Preconditions (do the static work first)
+## Safety gate
 
-1. Form the static hypothesis you want to confirm (a candidate `sizeof`, an argument count, an
-   indirect target). Debugging blind wastes runs.
-2. Pick the **exact** addresses to break at (the allocation call site, the ambiguous `call`, the
-   function entry). `disasm` them first.
-3. Know your ABI (see `ida-calling-convention`) so you read the right registers.
+Do not call any `dbg_*` tool until all of these are true:
 
-## Core loop
+- the user has clearly approved running or attaching to this target;
+- the executable, arguments, and attach or launch mode are known;
+- untrusted code is in an isolated VM or sandbox with suitable network and host controls;
+- an IDA GUI session has a debugger selected and the target configured;
+- the MCP server has unsafe debugger tools enabled;
+- the exact runtime question and stop point are known.
 
+Approval to run the target does not also grant IDB writes or `dbg_write`. Use the write
+scope in the working goal. If `dbg_start` fails because setup is missing, report the
+setup problem; do not retry in a loop.
+
+## Evidence rule
+
+Registers and memory at a breakpoint are direct evidence for that process, input, thread,
+and time. They do not prove all runs. Read the static instruction too: it gives the access
+width and operation that the live value is taking part in.
+
+## 1. State a testable hypothesis
+
+Use static work first. State one claim, for example:
+
+- “this allocation request is `0x48` on the selected path”;
+- “the access at `<instruction>` reads four bytes from base plus `0x10`”;
+- “the indirect call at `<instruction>` reaches `<candidate>`”;
+- “the first three Microsoft x64 argument positions hold these value classes.”
+
+Pick the exact instruction where the claim can be observed. Read it with `disasm` before
+launch. Note the static image base and the module whose code will run.
+
+## 2. Run to the evidence point
+
+A common launch flow is:
+
+```text
+dbg_start({})
+dbg_add_bp({"addrs":["<static instruction>"]})
+dbg_continue({})
+dbg_status({})
+dbg_regs_named({"register_names":"RAX, RCX, RDX, R8, R9"})
+dbg_read({"regions":[{"addr":"<live pointer>","size":64}]})
+dbg_stacktrace({})
+dbg_exit({})
 ```
-dbg_start()                                  # launch the target, suspended
-dbg_add_bp(addrs=["0x401230", "sub_401000"]) # code breakpoints (BPT_SOFT) at your sites
-dbg_continue()                               # run to the first hit  (or dbg_run_to(addr) for a one-shot)
-dbg_status()                                 # confirm suspended + current IP
-# ...at the break, read ground truth:
-dbg_regs_named(register_names="RCX, RDX, R8, RAX")   # arg/return registers (MS x64 shown)
-dbg_read(regions=[{ addr:"0x...", size: 0x40 }])     # actual bytes at a pointer
-dbg_stacktrace()                             # who called this, with module context
-# ...confirm, then WRITE THE FINDING INTO THE STATIC IDB (below), then:
-dbg_exit()                                   # clean up; don't leave the target running
+
+Set all needed breakpoints before `dbg_continue`. Use `dbg_run_to` for a checked one-shot
+location. Use `dbg_step_into` or `dbg_step_over` only as far as needed for the stated
+claim.
+
+For a hot breakpoint, use a condition:
+
+```text
+dbg_set_bp_condition({"items":[
+  {"addr":"<breakpoint>","condition":"RCX == 0x1000","language":"python"}
+]})
 ```
 
-Reads: `dbg_regs` / `dbg_gpregs` (full/GP set), `dbg_regs_named` (specific), `dbg_read` (memory).
-Control: `dbg_run_to`, `dbg_step_over`, `dbg_step_into`, `dbg_continue`. Conditions:
-`dbg_set_bp_condition(items=[{addr, condition, language:"python"}])` to stop only on the state you
-care about instead of thousands of times.
+The condition syntax depends on the selected debugger and expression language. Test it at
+a safe point before relying on it to filter hostile or high-volume code.
 
-## Techniques (what runtime settles that disasm can't)
+Always call `dbg_exit` when the observation is complete or an error ends the run, unless
+the user explicitly asked to leave the process live.
 
-**Real `sizeof` — break the allocator.** Put a BP on the allocation call site (or the app's own
-allocator wrapper — see `ida-cold-start`). At entry the size arg is in the ABI slot (MS x64:
-`HeapAlloc(heap, flags, size)` → size in `R8`; `malloc(size)` → `RCX`; `operator new(size)` → `RCX`).
-`dbg_step_over` the call; `RAX` is the returned pointer. You now have the *real* size (even when it
-was computed at runtime) and the object's address. Compare to your static guess and commit the type.
+## 3. Read each fact with its limits
 
-**Real field layout & accessors — hardware watchpoint.** `dbg_add_bp` only sets code breakpoints, so
-for a memory write-watch on the fresh object use `py_eval`:
+### Allocation request
+
+Break at the call site, not only at a shared allocator entry. Read the size from the
+correct ABI position, step over the call, and read the returned pointer.
+
+The observed value is the allocation request for that call. It is exact `sizeof(T)` only
+if one complete `T` is allocated with no wrapper header, trailer, array count, flexible
+tail, or spare capacity.
+
+### Field access
+
+Break at the access. The instruction gives offset and width; the debugger gives the live
+base, effective address, and value. One hit proves that access on that path.
+
+To watch later writes, `dbg_add_bp` is for code breakpoints. If hardware watchpoints are
+supported, an approved `py_eval` call can use IDAPython:
+
 ```python
 import ida_dbg
-ida_dbg.add_bpt(0x7ff6_0000_1000, 8, ida_dbg.BPT_WRITE)   # break on WRITE to this field/range
+ida_dbg.add_bpt(live_address, size, ida_dbg.BPT_WRITE)
 ```
-Continue; every hit is a real write — record offset (address − base), width, and value. This recovers
-the true layout, including offsets and the **maximum offset ever touched = the real struct size**, and
-catches accessors static xrefs miss (indirect/computed). Use `BPT_RDWR` to also catch reads.
 
-**Real argument values / phantom-arg disputes.** Break at a call site, read the arg registers/stack:
-are they real pointers, small ints, or dead? A register holding a valid pointer that disasm didn't
-attribute to an argument settles the count/type dispute (feed the result back to `ida-decomp-verify`).
+The highest observed `offset + width` is a lower bound on touched extent. It is not the
+full struct size unless separate allocation or stride evidence proves that size.
 
-**Resolve indirect calls & vtables.** Break at `call [reg]` / `call [rax+N]`, read the target register
-to get the concrete callee → name it and type the slot. Read the object's vtable pointer at runtime
-(`dbg_read` at offset 0, then the slot array) to dump and name every virtual method.
+### Arguments
 
-**Real data — decrypted strings, parsed config, computed keys.** Break *after* the routine that
-produces them and `dbg_read` the buffer to get plaintext/values, then annotate the static site with a
-comment. This is how you recover string-decryption output and config the static view only shows as
-noise.
+Break at both the call site and callee entry when possible. Map live values to the known
+ABI positions and check their use. A plausible pointer in an argument register can be a
+stale value, so one live sample does not prove a formal parameter.
 
-**Real control flow & counts.** Which branch is actually taken with live data; real loop trip count;
-real array element stride (watch the index register advance). Use conditional breakpoints to catch a
-specific state.
+### Indirect call or vtable slot
 
-## Reconcile — every runtime fact becomes a static edit (immediately)
+Break at the indirect transfer and read the computed target and object or table pointer.
+Check that the target lies in the expected loaded module and maps to a valid static
+function.
 
-The debug session is throwaway; the IDB is the deliverable. The moment runtime confirms something,
-write it into the static database in the same step:
-- confirmed size/layout → `declare_type` + apply (`ida-struct-recovery`);
-- confirmed prototype/convention → `set_type` (`ida-calling-convention`);
-- resolved indirect target / vtable slot → `rename` + prototype;
-- decrypted string / real value → `set_comments` at the static address.
+### Produced data
 
-**Rebase runtime → static addresses first.** ASLR means runtime addresses differ from the IDB. Convert
-via the module base (from `dbg_stacktrace` / the loaded module) with `int_convert` before naming
-anything — a name applied at an un-rebased address lands in the wrong place.
+Break after the producer. Read the buffer and its known length. Do not read beyond the
+validated region only to search for more text or keys.
 
-## Cautions
+## 4. Convert runtime addresses
 
-- One question per run; set breakpoints before continuing; `dbg_exit` when done — don't leave the
-  process live.
-- Use `dbg_set_bp_condition` for hot sites (allocators fire constantly) so you stop only on the case
-  you're investigating.
-- Anti-debug is common on protected/malware targets; a clean static hypothesis first means fewer runs
-  in a hostile process.
-- Runtime confirms, it does not persist — if you didn't write the fact into the IDB, it's lost when
-  the session ends.
+ASLR changes module addresses. Before applying a name or comment, compute:
+
+```text
+static_ea = runtime_ea - runtime_module_base + IDB_image_base
+```
+
+Get the runtime module base from debugger module or stack data. Use `int_convert` for
+base conversion and check the result against the static segment range.
+
+## 5. Compare and record
+
+State whether the observation confirms, rejects, or does not settle the hypothesis. For a
+load-bearing claim, observe a second suitable instance or call site when safe and useful.
+
+In approved IDB-write mode:
+
+- size or layout evidence routes to **ida-struct-recovery**;
+- ABI evidence routes to **ida-calling-convention**;
+- an indirect target may support `rename` and `set_type`;
+- produced data may support `set_comments`.
+
+Recompile affected functions and read them back. In read-only IDB mode, make no IDB
+change.
+
+## Done
+
+Finish only when:
+
+- the target, input, environment, thread, and evidence instruction are stated;
+- the static hypothesis and live observation are both recorded;
+- the limits of the observation are stated;
+- every runtime address used for a static claim was rebased and range-checked;
+- approved IDB changes were recompiled and checked;
+- `dbg_exit` stopped the process, or the user asked to keep it live;
+- the report says confirm, reject, or not settled.

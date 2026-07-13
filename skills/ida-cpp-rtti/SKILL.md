@@ -1,126 +1,184 @@
 ---
 name: ida-cpp-rtti
-description: Recover C++ classes on MSVC/Windows (and Itanium/GCC) by seeding from constructors, RTTI, and vftables over IDA Pro MCP — the single richest source of class size, field types, method names, and the inheritance graph. Use on C++ targets: pseudocode with vftable writes at offset 0, virtual calls like (*(this->vtbl->m3))(this), mangled names (??0Class@@...), or an object threaded through many methods. Turns raw vtables into named Class_vtbl structs and unnamed sub_* into Class::method. Extends ida-struct-recovery for the polymorphic case; pairs with ida-cold-start (constructor seeding) and ida-calling-convention (this-call).
+description: Recover C++ classes from constructors, RTTI, and vtables over IDA Pro MCP. Use on C++ targets when vtable pointer writes, virtual calls, RTTI data, or mangled names can seed class size, field types, method names, and the base graph.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-cpp-rtti task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current user target and write scope, lists concrete
+            evidence that all applicable Done checks passed, and says no required work
+            remains; or if it states a real blocker that needs user input, approval, or
+            external state and asks a direct question. Return {"ok": false, "reason":
+            "the next concrete work"} for a progress-only report, TODOs, unchecked
+            claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# C++ / RTTI recovery — constructors are the richest seed
+# C++ class recovery from RTTI and constructors
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-A constructor is the highest-value function in a C++ binary: in one place it gives you the object's
-**size** (`operator new(sizeof)`), its **vftable** (written to offset 0), its **field types** (each
-`this->field = …` init), its **base classes** (base-ctor calls), and — via the RTTI next to the
-vftable — often the **real class name**. Seed class recovery from constructors, not from scattered
-member accesses.
+Before any IDA or MCP tool call, set the working goal: recover the named class (its layout,
+vtable, methods, and bases) for the named owners in the requested read-only or IDB-write
+mode; finish when every claimed field, slot, and base has evidence.
 
-## Set the goal — `/goal`
+Update the working goal when the class or owner set changes. Keep working until the done
+checks pass. Do not declare or apply a type in read-only mode.
 
-On entry, pin the objective with the **`/goal`** command:
-`/goal recover class <Name>: struct + vftable from ctor/RTTI, name every method, apply this across members`.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, write scope, checks run, results, and remaining
+work. If required work remains, the hook blocks stopping and returns the next work.
 
-## Step 0 — Use what IDA already recovered (then verify it)
+## Evidence rule
 
-IDA auto-parses MSVC RTTI and often already created class structs, `??_7Class@@6B@` vftable symbols,
-and demangled names. Check before doing manual work — but verify against the bytes, don't trust blindly:
+RTTI data, mangled names, IDA auto-classes, and vtable symbols are strong hints, but they
+are still hypotheses. Check each one against disassembly: the constructor writes, the slot
+loads, and the object ABI. A constructor is the richest single seed, but its writes alone
+do not prove that no later or read-only field exists. Use `ida-struct-recovery` discipline
+for the layout and `ida-calling-convention` for the object ABI.
+
+## 1. Use existing analysis, then check it
+
+IDA often already parsed MSVC RTTI and made class types, vtable symbols, and demangled
+names. Read what exists before making new types:
+
+```text
+search_structs({"filter":"Foo"})
+type_query({"queries":[{"filter":"*","include_decl":true}]})
+type_inspect({"queries":[{"name":"Foo","include_members":true}]})
 ```
-search_structs(pattern="*")                       # existing class/vftable structs
-type_query({ queries:[{ filter:"*", include_decl:true }] })   # what types exist
-find_regex(pattern="\\.\\?A[UV]")                 # RTTI type-descriptor names ".?AVClass@@" / ".?AU..."
-```
-Extend and correct what's there rather than re-deriving from scratch.
 
-## Step 1 — Find vftables and their class names via RTTI (MSVC layout)
+Do not trust auto-RTTI blindly. Confirm the vtable slot count and the constructor writes in
+`disasm` before you rely on them. Extend and correct existing types; do not rebuild what is
+already right.
 
-MSVC lays out, in `.rdata`: `_RTTICompleteObjectLocator *` immediately **before** the vftable's
-function-pointer array (i.e. `vftable[-1]` = the COL). The COL → `_TypeDescriptor` whose name field is
-the mangled class name `.?AVClassName@@`.
+## 2. Find vtables and class names
+
+A vtable is a run of code pointers in read-only data that some function writes to an object
+at offset zero. Confirm both parts: the pointer run and the write.
+
+On MSVC, a complete-object locator pointer sits just before the vtable slot array
+(`vtable[-1]`). It leads to a type descriptor whose name field holds the mangled class name
+`.?AVClassName@@` (or `.?AU...` for a struct). Find the type descriptor names, then walk to
+the vtable:
+
+```text
+find_regex({"pattern":"\\.\\?A[UV]"})
+get_bytes({"regions":[{"addr":"<locator or slot array>","size":64}]})
 ```
-find_regex(pattern="\\.\\?AV")                    # locate type descriptors -> class names
-get_bytes / read_struct                           # read the COL / vftable pointer array in .rdata
-```
-For each vftable: demangle the class name and read the slot array (each entry is a virtual method).
-Demangle with IDA (auto), or `py_eval`:
+
+Demangle the name with IDA, or with an approved `py_eval` call:
+
 ```python
 import ida_name
-ida_name.demangle_name("??0CFoo@@QEAA@XZ", ida_name.MNG_LONG_FORM)   # -> CFoo::CFoo(void)
+ida_name.demangle_name("??0CFoo@@QEAA@XZ", ida_name.MNG_LONG_FORM)
 ```
 
-## Step 2 — Find constructors/destructors from the vftable
+For Itanium or GCC, use the matching data: type-info objects, vtables with an offset-to-top
+and a type-info pointer before the slot array, and `_Z` mangled names. If RTTI is absent,
+skip to the no-RTTI notes below.
 
-Any function that **writes a known vftable address into `[this + 0]`** is a ctor (or the dtor, which
-re-installs it). Link them:
-```
-xref_query({ addr:"??_7CFoo@@6B@", direction:"to", include_fn:true })   # who stores this vftable -> ctors/dtors
-```
-The object being written through is the `this` pointer of that class. Multiple vftable writes at
-different offsets in one function ⇒ multiple inheritance (a vftable per base subobject).
+## 3. Find constructors and destructors
 
-## Step 3 — Recover the class struct from the constructor
+A function that writes a known vtable address to the object at offset zero is a constructor
+or the destructor (the destructor re-installs the table during teardown):
 
-Read the ctor's `disasm`/`decompile` and build the layout:
-- **Size** from `operator new(sizeof)` (or `malloc`) at the allocation site that feeds this ctor.
-- **vftable** pointer at offset 0 → field `Class_vtbl *vftable;`.
-- **Base classes**: a call to another ctor on `this` (or `this+off`) at the *start* is a base-class
-  subobject — recover that base first and nest it (`struct Derived { Base base; … };`).
-- **Members**: each `this->field = value` initializes a field — type it from the value (pointer,
-  int width from access, another object from a member-ctor call). Embedded object ⇒ nested struct.
-- Leave unobserved gaps as `char gapN[k]` (see `ida-struct-recovery` discipline).
-```
-declare_type(decls=[
-  "struct CFoo_vtbl { void (__fastcall *dtor)(CFoo*); int (__fastcall *run)(CFoo*, int); };",
-  "struct CFoo { CFoo_vtbl *vftable; int state; char *name; };"
-])
+```text
+xref_query({"queries":[{"addr":"<vtable symbol or address>","direction":"to","include_fn":true}]})
 ```
 
-## Step 4 — Type the vftable and name the methods
+The object written through is the `this` value for that class. Two vtable writes at
+different offsets in one function suggest multiple base subobjects. Tell a constructor from
+a destructor by its other behavior: a constructor runs base and member setup and often
+follows an allocation; a destructor runs cleanup and often calls `operator delete`.
 
-Each vftable slot is a virtual method taking `this` as the first parameter. Convention: **x86
-`__thiscall`** (`this` in `ecx`), **x64** standard fastcall (`this` in `rcx`) — confirm via
-`ida-calling-convention`.
-- Name each slot function `Class::method` (`rename`), demangling any mangled symbol for the real name.
-- Set each method's prototype with `this` first (`set_type` / `type_apply_batch`).
-- Apply the `Class *` type to `this` across every method (`type_apply_batch`), and `make_data` the
-  vftable global as `Class_vtbl`.
-Now `(*(this->vftable->run))(this, x)` renders as a named virtual call, everywhere.
+## 4. Recover the class layout from the constructor
 
-## Step 5 — Rebuild the inheritance graph (RTTI hierarchy)
+Read the constructor with `disasm` and `decompile` and build a layout with evidence, using
+the `ida-struct-recovery` rules:
 
-`_RTTIClassHierarchyDescriptor` + `_RTTIBaseClassArray` (reachable from the COL) enumerate all bases
-and their offsets. Use them to declare base structs, nest them at the right offsets, and place each
-base's vftable pointer. Multiple/virtual inheritance ⇒ several vftables + vbase offsets + adjustor
-thunks (tiny functions that fix `this` by a constant then jump) — name the thunks and move on.
+- **Size bound.** If an allocation feeds this object, its request is a size hint, not proof.
+  It equals `sizeof(T)` only when one whole object is allocated with no wrapper header,
+  trailer, array, or spare capacity. Constructor writes do not prove the full size.
+- **vptr.** The vtable write gives a `vptr` field, normally at offset zero.
+- **Bases.** A call to another constructor on `this` (or `this + offset`) near the start is
+  a base subobject. Recover that base first and nest it.
+- **Members.** Each `this + offset = value` write is a field candidate; type it from the
+  value and its later use (pointer, integer width, embedded object from a member
+  constructor). Keep unknown space as explicit padding.
 
-## Non-MSVC and no-RTTI fallbacks
+```text
+declare_type({"decls":[
+  "struct CFoo_vtbl;",
+  "struct CFoo_vtbl { void (*dtor)(struct CFoo *); int (*run)(struct CFoo *, int); };",
+  "struct CFoo { struct CFoo_vtbl *vptr; int state; char *name; };"
+]})
+```
 
-- **Itanium/GCC** (`_ZTV` vtables, `_ZTI` typeinfo, `_Z`-mangled names): same idea, different symbols;
-  demangle via IDA. Vtable layout has an offset-to-top + typeinfo pointer *before* the slot array.
-- **RTTI stripped (`/GR-`) or optimized:** no names. Detect classes structurally — a `.rdata` array of
-  code pointers that some function writes to `[obj+0]` is a vftable; name the class generically
-  (`Class_401230`) from its ctor address and proceed. Non-virtual classes have no vftable at all →
-  recover them via allocation-driven discovery (`ida-cold-start` / `ida-struct-recovery`).
-- **COM interfaces:** vtable-only, first three slots are `QueryInterface`/`AddRef`/`Release`
-  (IUnknown); type them from the standard signatures.
+## 5. Type the vtable and name checked methods
 
-## Verify & persist
+Each slot is a virtual method that takes the object as its first argument. Confirm the
+object ABI first: x86 member calls commonly pass `this` in `ECX` (thiscall), and x64 passes
+it in the first integer register. Verify with `ida-calling-convention`.
 
-- Demangled/RTTI name matches the mangled symbol and the class's behaviour (spot-check a method).
-- `type_inspect` the class: size matches the `operator new` constant; base offsets line up.
-- Every member method renders `this->field` by name and virtual calls resolve to `Class::method`.
-- Commit continuously — each recovered vftable, named method, and typed field is written the moment
-  it's confirmed, not saved for a final dump.
+- Name a slot function `Class::method` only when its role has evidence (a demangled symbol,
+  a clear string, or checked behavior). Do not name a slot from its index alone.
+- Set each checked slot prototype with the object as the first parameter.
+- Apply the object type to `this` in proven methods, and set the vtable global type:
 
-## Traps
+```text
+type_apply_batch({"batch":{"edits":[
+  {"addr":"<method1>","variable":"a1","ty":"struct CFoo *"},
+  {"addr":"<method2>","variable":"this","ty":"struct CFoo *"}
+]}})
+make_data({"items":[{"addr":"<vtable>","type":"struct CFoo_vtbl","name":"CFoo_vtbl_instance"}]})
+force_recompile({"items":[{"addr":"<method1>"},{"addr":"<method2>"}]})
+```
 
-- **Trusting IDA's auto-RTTI blindly** — usually right, but verify the vftable slot count and the
-  ctor's actual writes against `disasm`; stripped/partial RTTI produces gaps.
-- **Wrong `this` convention** — x86 `__thiscall` vs x64 fastcall; getting it wrong scrambles every
-  method's args (→ `ida-calling-convention`).
-- **Confusing ctor with dtor** — both write the vftable; the dtor also frees/tears down. Check for
-  `operator delete` / member cleanup to tell them apart.
-- **Adjustor thunks look like real methods** — a 2-instruction `sub ecx, N; jmp` is a `this`-adjust
-  for a base, not logic; name it as a thunk.
+Read the methods again. A virtual call should now show a named slot. If it does not, the
+slot type or object type disagrees with the bytes; fix the declaration, not the call.
+
+## 6. Rebuild the base graph
+
+When RTTI has a class-hierarchy descriptor and a base-class array, use them to list bases
+and their offsets. Declare base structs, nest them at the right offsets, and place each
+base vptr. Multiple or virtual inheritance gives several vtables, base-offset fields, and
+small adjustor thunks (a `this` fixup and a jump). Name a confirmed thunk as a thunk; do
+not treat it as class logic.
+
+## No-RTTI, COM, and Itanium notes
+
+- **No RTTI (`/GR-` or stripped).** No class names. Detect a class by structure: a
+  read-only run of code pointers that a function writes to an object at offset zero. Name
+  the class from its constructor address (for example `Class_401230`) and go on. A
+  non-virtual class has no vtable; recover it through allocation and access evidence with
+  `ida-struct-recovery`.
+- **COM interfaces.** These are vtable-only. The first three slots are `QueryInterface`,
+  `AddRef`, and `Release` (IUnknown). Type them from the standard signatures and confirm by
+  use.
+- **Itanium or GCC.** Same idea, different data and mangling; demangle `_Z` names with IDA.
+
+## Dynamic check
+
+Use **ida-dynamic-verify** only with explicit approval when static evidence cannot settle a
+load-bearing size, slot target, or base offset. Read the object at runtime, or the computed
+target of a virtual call, then rebase the address before recording it.
+
+## Done
+
+Finish only when:
+
+- each recovered class names its evidence: vtable write, RTTI or structural detection, and
+  constructor behavior;
+- size claims are marked exact, upper bound, or lower bound, not assumed from the
+  constructor alone;
+- each named method slot has behavior or symbol evidence, and unknown slots are left
+  unnamed;
+- the object ABI (`this` register and convention) is stated and applied;
+- base classes, adjustor thunks, and any multiple-vtable layout are described;
+- approved declarations and applications were recompiled and read back;
+- open slots, missing RTTI, and unresolved fields are stated.

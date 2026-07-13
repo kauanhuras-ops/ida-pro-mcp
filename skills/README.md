@@ -1,68 +1,90 @@
-# IDA Pro MCP analysis skills — the Swiss-army knife
+# IDA Pro MCP analysis skills
 
-A cohesive skill suite for driving an IDA Pro database to a fully named, typed, and
-disassembly-verified state over MCP. The discipline is borrowed from decomp.me-style
-recompilation: **disassembly is ground truth, decompiler output is a hypothesis, iterate to a
-fixpoint, and confirm every claim against the bytes.**
+This set has nine analysis skills for work on an IDA database through MCP. Start with
+`ida-re-methodology`. It sets the work scope and sends the task to a focused skill. A tenth
+skill, `ida-python`, is a reference for IDAPython used from approved `py_eval` calls.
 
-> ⚠️ **Trust only the disassembly, and your own eyes.** Comments lie; the decompiler guesses, errs,
-> and silently breaks; the disassembly is the bytes the CPU runs and never lies. Every skill opens
-> with this rule — when pseudocode or a comment disagrees with the disasm, the disasm wins.
+## Stop-hook contract
 
-Each skill also pins the current objective with the **`/goal`** command on entry and re-issues it as
-the target sharpens. This requires your own `/goal` skill/command to be installed alongside these
-(Claude Code only; Codex has no slash-command mechanism). If `/goal` isn't present the step is simply
-skipped — the rest of the skill still works.
+A skill cannot invoke a slash command. Each `SKILL.md` therefore defines its own
+prompt-based `Stop` hook in YAML frontmatter. Claude Code loads the hook only while that
+skill is active. When the agent tries to stop, the hook checks the last response:
 
-Skills auto-load from this directory (`skills/<name>/SKILL.md`). Start with `ida-re-methodology`; it
-routes to the rest.
+- `{"ok": true}` allows the agent to stop;
+- `{"ok": false, "reason": "..."}` blocks the stop and gives the reason back as the next
+  work instruction.
+
+The hook allows a stop only after a completion audit, or for a real blocker that needs
+user input, approval, or external state. A progress note, TODO, failed check, unrun check,
+or unsupported “done” claim is blocked.
+
+The `/goal` command is an optional command that the user may run. Skills do not try to
+invoke it. Claude Code implements `/goal` as a session prompt-based Stop hook, so the
+skill hooks use the same supported mechanism.
+
+## Common work rules
+
+Every skill also follows these rules.
+
+1. **Set the working goal first.** Before any IDA or MCP tool call, name the target,
+   read-only or IDB-write scope, evidence needed, and clear done checks. Update this goal
+   when the target or scope changes.
+2. **Use evidence in layers.** Treat decompiler output, auto-analysis, names, types, and
+   comments as hypotheses. Use disassembly and raw bytes as the main static evidence.
+   Check function bounds and instruction decoding when they are in doubt. A runtime
+   observation is strong evidence for that run, but it does not prove all inputs or runs.
+3. **Respect write scope.** A request to explain or review is read-only unless the user
+   also asks for IDB changes. For approved IDB work, write only supported names, types,
+   and comments. Record an uncertain idea as a `?` comment only when comments are in
+   scope. Do not make a change only to meet a change count.
+4. **Fix known conflicts.** If new evidence disproves an in-scope name, type, prototype,
+   or field, fix it before using it as a base for more work. Recompile affected functions
+   and check the result.
+5. **Report the result.** State what was checked, what changed, what evidence supports it,
+   what remains uncertain, and whether every applicable done check passed.
+
+## Hook limits and checks
+
+The Stop hook is a guard, not an unlimited runner:
+
+- it does not run after a user interrupt;
+- API errors fire `StopFailure` instead of `Stop`;
+- Claude Code ends the turn after eight consecutive Stop-hook blocks;
+- the prompt judge checks the completion report, so the report must give concrete
+  evidence and must not claim success only to pass the hook.
+
+After loading a skill, use Claude Code's `/hooks` view to confirm that its prompt-based
+`Stop` hook is active. The hook format follows the
+[official Claude Code hook reference](https://code.claude.com/docs/en/hooks).
+
+## Skills
 
 | Skill | Scope | Use when |
 |---|---|---|
-| **ida-re-methodology** | Master workflow & router | Any session start; deciding how to approach a binary/subsystem/function |
-| **ida-cold-start** | Blank IDB → first targets | Fresh binary, nothing named yet, "where do I start" |
-| **ida-function-recon** | One function → fully worked up | "What does this function do", "clean up / type this function" |
-| **ida-cluster-analysis** | Groups of functions; clustering | "Map this subsystem", "group these functions", "what touches g_state" |
-| **ida-struct-recovery** | Structs, classes, vtables, unions | Pseudocode full of `*(a1 + 0x18)`; a threaded context/`this` pointer |
-| **ida-cpp-rtti** | C++ classes via constructors/RTTI/vtables | MSVC/GCC C++: vftable writes, virtual calls, mangled names |
-| **ida-decomp-verify** | Find/fix decompiler errors vs disasm | Pseudocode looks wrong (phantom args, dropped code, `__int64` soup) |
-| **ida-calling-convention** | Confirm convention + args + return type | Before committing any prototype; arguments render wrong |
-| **ida-dynamic-verify** | Confirm facts by RUNNING it (debugger) | Real size/args/data/indirect targets you can't settle statically (unsafe, opt-in) |
+| **ida-re-methodology** | Main workflow and router | Start of an analysis task |
+| **ida-cold-start** | Fresh IDB survey and first targets | The database has little useful analysis |
+| **ida-function-recon** | One function | Explain, name, or type one function |
+| **ida-cluster-analysis** | A related function group | Map a subsystem or shared-data group |
+| **ida-struct-recovery** | Structs, classes, unions, and vtables | Raw base-plus-offset accesses hide layout |
+| **ida-cpp-rtti** | C++ classes from RTTI and constructors | Vtable writes, virtual calls, RTTI, or mangled names |
+| **ida-decomp-verify** | Pseudocode checks | Hex-Rays output may be wrong or incomplete |
+| **ida-calling-convention** | ABI, arguments, and return type | A prototype needs proof |
+| **ida-dynamic-verify** | Debugger-based checks | Static evidence cannot settle a fact and the user has approved execution |
 
-### How they fit together
+## Route
 
+```text
+ida-re-methodology
+├── ida-cold-start
+├── ida-function-recon
+│   ├── ida-calling-convention
+│   ├── ida-struct-recovery
+│   │   └── ida-cpp-rtti
+│   └── ida-decomp-verify
+├── ida-cluster-analysis
+│   └── focused skills for each member
+└── ida-dynamic-verify
 ```
-ida-re-methodology                    (survey → pick target → route → iterate → verify)
-    ├── ida-cold-start                blank IDB: analysis → library code → imports → seed targets
-    ├── ida-function-recon            single function loop
-    │       ├── ida-calling-convention   confirm prototype from disasm
-    │       ├── ida-struct-recovery      resolve *(base + N) into fields
-    │       │       └── ida-cpp-rtti     C++: seed classes from ctors/RTTI/vtables
-    │       └── ida-decomp-verify        QA the pseudocode against the bytes
-    ├── ida-cluster-analysis          groups: discover → analyze_component → shared types → leaves→roots
-    │       └── (reuses all of the above per member function)
-    └── ida-dynamic-verify            run it: confirm real size/args/data, then persist to the IDB
-```
 
-### The invariant every skill upholds
-
-Every reachable function, parameter, global, and structure ends up **named and correctly typed**, and
-every **calling convention and return type is confirmed against the disassembly** — not left as an
-unverified Hex-Rays guess. Uncertainty is recorded as a `?`-hedged comment, never baked into a
-confident name.
-
-And the database stays **internally consistent at all times**: the moment current work disproves an
-earlier name, type, prototype, convention, or struct field, it is fixed *immediately* and
-re-`force_recompile`d — never deferred. A stale error propagates into every downstream pass, so
-correcting upstream mistakes on sight is part of the task, not cleanup for later.
-
-**The deliverable is the modified database, not an explanation of it.** Every skill is action-first:
-understand one thing, write it to the IDB (`rename` / `set_type` / `set_comments`) in the same step,
-then move on. Comments are the cheapest commit and are always available. Analysis that never becomes
-an IDB edit is lost work — a turn that produced lots of reasoning and zero database changes (on a
-function that wasn't already done) is a failed turn.
-
-### Companion skill
-
-`ida-python/` documents the underlying IDAPython API (`ida_*` modules, `idautils`) for when a task
-needs `py_eval`/`py_exec_file` beyond the structured MCP tools.
+Dynamic work is unsafe and opt-in. Running a target needs clear user approval and a safe
+test environment.

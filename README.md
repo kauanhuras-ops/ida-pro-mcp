@@ -64,14 +64,20 @@ uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-a
 ## Analysis Skills (Swiss-army knife)
 
 The `skills/` directory ships a set of model-invoked analysis playbooks (see
-[`skills/README.md`](skills/README.md)): `ida-re-methodology` (master workflow), `ida-cold-start`
-(blank IDB → first targets), `ida-function-recon`, `ida-cluster-analysis`, `ida-struct-recovery`,
-`ida-cpp-rtti` (C++ classes from constructors/RTTI/vtables), `ida-decomp-verify`,
-`ida-calling-convention`, and `ida-dynamic-verify` (confirm facts by running the target under the
-debugger). They encode decomp.me-style discipline — disassembly is ground truth,
-iterate to a fixpoint, name and type everything, confirm conventions/return types from the bytes, and
-fix upstream mistakes on sight. Each `SKILL.md` has a `description` that lets the model auto-load it
-when relevant.
+[`skills/README.md`](skills/README.md)): `ida-re-methodology` (main workflow and router),
+`ida-cold-start` (fresh IDB → first targets), `ida-function-recon`, `ida-cluster-analysis`,
+`ida-struct-recovery`, `ida-cpp-rtti` (C++ classes from constructors/RTTI/vtables), `ida-decomp-verify`,
+`ida-calling-convention`, and `ida-dynamic-verify` (confirm one fact by running the target under the
+debugger). `ida-python` is a companion IDAPython reference for approved `py_eval` work. Each `SKILL.md`
+has a `description` that lets the model auto-load it when relevant.
+
+They share one discipline: **use evidence in layers** — decompiler output, auto-analysis, names, types,
+and comments are hypotheses; disassembly and raw bytes are the main static evidence; a runtime
+observation only proves that run. Each skill sets a **working goal** (target, read-only vs IDB-write
+scope, done checks) and carries a prompt-based **`Stop` hook** in its frontmatter that blocks stopping
+on a progress-only report, an unchecked claim, or a failed/unrun check — the skill's own supported way
+to enforce a completion audit (the `/goal` command is optional and never invoked by a skill). See
+[`skills/README.md`](skills/README.md) for the hook contract and its limits.
 
 ### Claude Code
 

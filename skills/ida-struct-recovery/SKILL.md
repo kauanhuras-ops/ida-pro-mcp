@@ -1,132 +1,171 @@
 ---
 name: ida-struct-recovery
-description: Recover C structs, classes, vtables, and unions from disassembly over IDA Pro MCP, so that pointer arithmetic (*(a1 + 0x18)) renders as named field access (a1->count). Use whenever pseudocode is full of raw offset dereferences, when a context/this pointer is threaded through functions, or when the user asks to reconstruct a data structure. Covers deriving field offset/size/type from access widths in disasm, declaring the type, applying it, C++ vtable recovery, and verifying the layout round-trips. Pairs with ida-cluster-analysis (find the struct's owners) and ida-function-recon.
+description: Recover evidence-based structs, classes, unions, and vtables from IDA disassembly. Use when raw base-plus-offset accesses hide a shared layout.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-struct-recovery task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current user target and write scope, lists concrete
+            evidence that all applicable Done checks passed, and says no required work
+            remains; or if it states a real blocker that needs user input, approval, or
+            external state and asks a direct question. Return {"ok": false, "reason":
+            "the next concrete work"} for a progress-only report, TODOs, unchecked
+            claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# Struct recovery — from `*(a1 + 0x18)` to `a1->count`
+# Struct recovery
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-## Set the goal — `/goal`
+Before any IDA or MCP tool call, set the working goal: recover the named type for the
+named owners in the requested read-only or IDB-write mode; finish when every claimed
+field offset, width, type, and size bound has evidence.
 
-On entry, pin the objective with the **`/goal`** command, and re-issue it as the layout firms up:
-`/goal recover struct <Name> from access widths in disasm and apply it across every owner`.
+Update the working goal when the owner set or type target changes. Keep working until the
+done checks pass. Do not declare or apply a type in read-only mode.
 
-A struct is proven by how code accesses memory through a base pointer. Read the accesses, derive the
-layout, declare the type, apply it, and the pointer arithmetic collapses into named fields everywhere.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, write scope, checks run, results, and remaining
+work. If required work remains, the hook blocks stopping and returns the next work.
 
-## Step 1 — Find the base pointer and collect its accesses
+## Evidence rule
 
-Identify the pointer that's dereferenced at various constant offsets (the `this`/context/handle):
-- In `decompile` output: the variable in `*(T *)(base + N)` / `base[N]` patterns.
-- Collect every offset+width. `disasm`/`insn_query` give the *ground-truth* access width per site:
-```
-insn_query({ queries:[{ mnem:"mov", func: addr }] })   # find [reg+disp] accesses and their widths (scope: func)
-disasm(addr)                                       # read displacement + operand size directly
-```
-The **operand size** at each `[base + N]` is the field size at offset `N`:
-`byte ptr`→1, `word`→2, `dword`→4, `qword`→8. `movsx`/`movzx` tells you signed/unsigned. A `call
-[base + N]` means offset `N` is a function pointer (vtable slot or callback).
+Decompiler expressions and current types are hypotheses. Use decoded memory operands,
+access widths, calls, and data flow as static evidence. First check that the same base
+value reaches each access. A runtime observation applies to the observed object and path
+only.
 
-## Step 2 — Derive the layout
+## 1. Collect accesses
 
-Build an offset→(size, type, name) table from the evidence:
-- Every observed offset is a field start. Gaps between observed offsets are unknown padding/fields —
-  leave them as `char gapN[k]` so total size and later offsets stay correct.
-- Type each field from its use: dereferenced further → pointer (recurse into a sub-struct); used in
-  `movsx`+signed compare → signed int; passed to a known API → that API's parameter type; `call`
-  through it → function pointer.
-- Don't invent fields you didn't observe. Under-specifying (a gap) is safe; a wrong field shifts every
-  later offset and corrupts the whole struct.
-- Use `int_convert` for every offset/size — never hand-convert.
+Find the base pointer used at constant offsets. For each access, record:
 
-Cross-check what IDA already knows:
-```
-read_struct({ queries:[{ addr, struct? }] })   # auto-detects an existing/likely type at addr
-search_structs(pattern="...")                  # is this struct already partially defined?
-type_inspect({ queries:[{ name:"Config", include_members:true }] })
+| Item | Evidence |
+|---|---|
+| owner function | function and basic block |
+| base value | parameter, local, global, or loaded field |
+| offset | encoded displacement |
+| width | byte, word, dword, qword, vector, or other width |
+| action | read, write, address-take, compare, or call |
+| use | integer, pointer, array index, API argument, callback, and so on |
+
+Use `disasm` for the final width and operand check. `insn_query` can find candidates:
+
+```text
+insn_query({"queries":[{"func":"<owner>","mnem":"mov","include_disasm":true}]})
 ```
 
-**Declare early and incrementally — don't wait for a complete layout.** As soon as you have two or
-three confirmed fields, `declare_type` the partial struct (rest as `gapN`) and apply it. A partial
-struct in the IDB immediately improves pseudocode and is real progress; a "complete" struct you're
-still holding in your head is not. Each newly confirmed field is a re-`declare_type` commit, not a
-note for a final big declaration.
+Do not assume every observed offset starts an independent field. An access may point into
+an array, embedded object, union member, bitfield container, or unaligned data.
 
-## Step 3 — Declare the type (partial is fine, commit it)
+## 2. Form a layout model
 
+For each candidate member:
+
+- A dereference of the loaded value supports a pointer, but not its full pointed-to type.
+- A known API parameter can support a stronger type.
+- `movsx` or a signed comparison supports signed use; `movzx` or an unsigned comparison
+  supports unsigned use at that site.
+- Different types at the same offset may mean a union, reused storage, or a wrong base
+  model.
+- A call through a value loaded from the object supports a callback field. A virtual call
+  normally has a separate load of a vtable pointer and then a slot load.
+
+Keep unknown space as explicit padding only when later offsets need stable placement. Do
+not give padding a semantic name.
+
+Check existing types before making a new one:
+
+```text
+read_struct({"queries":[{"addr":"<instance>"}]})
+search_structs({"filter":"Config"})
+type_inspect({"queries":[{"name":"Config","include_members":true}]})
 ```
-declare_type(decls=[
-  "struct Config { int magic; char gap4[4]; char *path; int count; void (*on_close)(Config *); };"
-])
+
+`read_struct` shows data through a type. It does not prove that the current type is right.
+
+## 3. Track size evidence
+
+Keep size facts separate:
+
+- `max(offset + width)` is a lower bound on accessed extent.
+- An array stride can support an element size when indexing proves the stride.
+- An allocation request is the block request for that call. It equals `sizeof(T)` only
+  when one complete `T` is allocated with no header, trailer, flexible data, or spare
+  capacity.
+- Constructor writes do not prove that no later or read-only fields exist.
+
+State whether each size is exact, an upper bound, or a lower bound.
+
+## 4. Declare and apply
+
+In IDB-write mode, a partial declaration is useful when each named member has evidence:
+
+```text
+declare_type({"decls":[
+  "struct Config; struct Config { int magic; char gap_4[4]; const char *path; int count; void (*on_close)(struct Config *); };"
+]})
 ```
-`declare_type` accepts full C, so declare interdependent structs together (forward-declare pointers).
-For enums used as fields, `enum_upsert` first.
 
-## Step 4 — Apply the type and make it propagate
+Check compiler alignment. If an offset does not match the evidence, use explicit padding
+or the right packing rule; do not change an observed offset to fit the declaration.
 
-Apply the struct type to the base pointer wherever it appears:
+Apply the type only to proven owners:
+
+```text
+set_type({"edits":[{"addr":"<owner>","variable":"a1","ty":"struct Config *"}]})
+type_apply_batch({"batch":{"edits":[
+  {"addr":"<owner1>","variable":"a1","ty":"struct Config *"},
+  {"addr":"<owner2>","variable":"ctx","ty":"struct Config *"}
+]}})
+set_op_type({"items":[{"addr":"<instruction>","op_n":1,"kind":"stroff","struct":"Config","delta":0}]})
+force_recompile({"items":[{"addr":"<owner1>"},{"addr":"<owner2>"}]})
 ```
-set_type({ addr, variable:"a1", ty:"Config *" })          # local/param in one function
-type_apply_batch({ edits:[ {addr:f1, variable:"a1", ty:"Config *"}, {addr:f2, ...} ] })  # across the cluster
-make_data({ items:[{ addr:"g_config", type:"Config", name:"g_config" }] })   # a global instance
-force_recompile(addr)
-```
-For raw operands in the *disassembly* (struct member offset annotations, the GUI "T"/struct-offset):
-```
-set_op_type({ items:[{ addr:insnEA, op_n:1, kind:"stroff", struct:"Config", delta:0 }] })
-```
-Re-read `decompile`. `*(a1 + 0x18)` should now read `a1->count`. If it doesn't, the offset/size in
-your declaration disagrees with the access width — fix the declaration, not the code.
 
-**Fix-on-sight — a struct is never "finished".** A later function will access an offset you marked as
-a gap, or contradict a field's width/sign/type you already declared. The instant that happens, edit
-the struct with `declare_type` (re-declare the corrected layout) and `force_recompile` every owner —
-do not leave the wrong field in place. Because the type is shared, one wrong field mis-renders the
-struct in *every* member function at once, so the cost of deferring the fix scales with the size of
-the cluster. Correct the layout the moment new evidence lands, then keep going.
+Use `make_data` only when the task needs a data item to be created or replaced. For an
+existing global, prefer `set_type` when it is enough.
 
-## Step 5 — C++ vtables and classes
+Read the owners again. A better decompile is a check on application, not proof of layout.
+If new evidence conflicts with a field, correct the shared type and recheck every
+affected owner.
 
-> For real C++ targets (MSVC/GCC) with RTTI, mangled names, or many virtual calls, use the dedicated
-> **ida-cpp-rtti** skill — it seeds whole classes from constructors + RTTI (size, fields, method
-> names, inheritance) far faster than deriving each field by hand. The quick recipe below suffices for
-> a one-off vtable or an RTTI-stripped object.
+## 5. C++ objects and vtables
 
-1. A struct whose **offset 0 is a pointer to an array of code pointers** is a polymorphic object; that
-   array is the vtable.
-2. Recover the vtable as its own struct of function pointers: read the pointer array (`get_bytes` /
-   `read_struct`), each slot is a method — name them (`Class::method`) and set their prototypes with
-   the object as `this` (first parameter, `__thiscall`/`__fastcall` per `ida-calling-convention`).
-3. Declare `struct Class_vtbl { ret (*method0)(Class *); ... };` and make the object's first field
-   `Class_vtbl *vtbl`. Now virtual calls `(*(a1->vtbl->method3))(a1, ...)` render with names.
-4. Constructors write the vtable pointer to offset 0 — use that to find every vtable and its class.
+A pointer at offset zero that leads to code pointers is a vptr candidate, not proof by
+itself. Check:
 
-## Step 6 — Verify the layout round-trips
+1. constructor or setup writes of the table address;
+2. indirect calls through stable table slots;
+3. table xrefs, RTTI, or related tables when present;
+4. the ABI form of the object parameter at each method;
+5. slot prototypes at more than one call site when possible.
 
-- `type_inspect({ queries:[{name:"Config", include_members:true}] })` — sizes/offsets match what you
-  declared.
-- `read_struct` a real instance in memory and sanity-check field values (pointers look like pointers,
-  counts are plausible, strings resolve).
-- Every member function of the struct now renders fields by name (spot-check via `decompile`).
-- Total struct size matches allocation sites (`malloc(sizeof)` constant, or the stride of an array of
-  these) — a mismatch means a missing/oversized field.
-- **When the size/layout can't be settled statically** (computed allocation, offsets only touched on
-  paths you can't trace), confirm at runtime with **ida-dynamic-verify**: break the allocator for the
-  real size, and watchpoint the object to see which offsets are actually written (max offset = true
-  size). Then persist the confirmed layout here.
+Declare the table as typed function-pointer fields only for checked slots. Do not name an
+unknown slot from its index alone.
 
-## Traps
+For a real C++ target with RTTI, mangled names, or many virtual calls, use **ida-cpp-rtti**.
+It seeds a whole class from its constructor and RTTI (size hint, vptr, fields, methods, and
+base graph) with the same evidence rules. The steps here are enough for a single vtable or
+an object with no RTTI.
 
-- **Off-by-one offsets from wrong widths** — always take the width from `disasm`, not a guess.
-- **Union confusion** — the same offset accessed as different types in mutually exclusive paths is a
-  union, not a bug. Declare it as `union`.
-- **Packing/alignment** — if declared offsets don't line up with observed ones, the struct is packed
-  or has explicit padding; add `char gapN[k]` rather than fighting the compiler's alignment.
-- **Shared struct, one owner named** — after recovery, apply it across ALL owners (see
-  `ida-cluster-analysis`), not just the function you were looking at.
+## Dynamic check
+
+Use **ida-dynamic-verify** only with explicit approval when static evidence cannot settle
+a load-bearing size, variant, or indirect target. A watchpoint hit gives a real access for
+that run. The highest offset seen remains a lower bound unless allocation or stride
+evidence proves the full extent.
+
+## Done
+
+Finish only when:
+
+- each claimed member has offset, width, action, and type evidence;
+- gaps, unions, arrays, embedded objects, and padding are not hidden by certain names;
+- size claims are marked exact, upper bound, or lower bound;
+- the owner set and all applied pointer types are listed;
+- approved declarations and applications were read back after recompile;
+- every known conflict was fixed and open layout questions are stated.

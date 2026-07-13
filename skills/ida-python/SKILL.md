@@ -5,17 +5,9 @@ description: IDA Pro Python scripting for reverse engineering. Use when writing 
 
 # IDAPython
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
-
-## Set the goal — `/goal`
-
-On entry, pin the objective with the **`/goal`** command, and re-issue it whenever the task shifts:
-`/goal <what this script/analysis must achieve, e.g. enumerate & type all callers of X>`.
+Reference for IDAPython used from approved `py_eval` / `py_exec_file` calls. Follow the same evidence
+rule as the analysis skills: decompiler output, names, types, and comments are hypotheses; disassembly
+and raw bytes are the main static evidence.
 
 Use modern `ida_*` modules. Avoid legacy `idc` module.
 

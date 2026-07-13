@@ -1,132 +1,169 @@
 ---
 name: ida-function-recon
-description: Deep, complete workup of a SINGLE function over IDA Pro MCP — from sub_XXXX to fully named, typed, and disassembly-verified. Use when the user points at one function ("what does sub_401000 do", "clean up this function", "type this properly"). Covers the recon→hypothesize→verify→commit→propagate loop, renaming locals/stack/globals, setting the prototype, and confirming every claim against the bytes. For convention/return-type specifics see ida-calling-convention; for struct fields see ida-struct-recovery; for pseudocode-vs-asm mismatches see ida-decomp-verify.
+description: Analyze one function over IDA Pro MCP. Use to explain its behavior or, when IDB changes are requested, give it supported names, types, comments, and a checked prototype.
+hooks:
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: >-
+            Decide whether Claude may stop the active ida-function-recon task. Review
+            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
+            the message names the current user target and write scope, lists concrete
+            evidence that all applicable Done checks passed, and says no required work
+            remains; or if it states a real blocker that needs user input, approval, or
+            external state and asks a direct question. Return {"ok": false, "reason":
+            "the next concrete work"} for a progress-only report, TODOs, unchecked
+            claims, failed or unrun checks, or unsupported completion.
+          timeout: 30
+          continueOnBlock: true
 ---
 
-# Function recon — one function to fixpoint
+# Function recon
 
-> ⚠️ **GROUND TRUTH — TRUST ONLY THE DISASSEMBLY, AND YOUR OWN EYES.** Never trust the decompiler
-> output or existing comments. **Comments lie** — stale, wrong, or deliberately misleading. **The
-> decompiler guesses, errs, and silently breaks.** The disassembly is the bytes the CPU actually
-> executes; it never lies. Every name, type, prototype, struct field, and conclusion must trace back
-> to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
-> disagrees with the disassembly, the disassembly wins — every time.
+## Goal and stop contract
 
-## Set the goal — `/goal`
+Before any IDA or MCP tool call, set the working goal: analyze the named function in the
+requested read-only or IDB-write mode; finish when behavior, control flow, calls, data
+use, and prototype questions are checked against disassembly.
 
-On entry, pin the objective with the **`/goal`** command, and re-issue it as the target sharpens:
-`/goal fully name & type <func>, confirm its prototype from disasm, resolve every struct access`.
+Update the working goal if the target changes. Keep working until the done checks pass. A
+request such as “what does this function do?” is read-only unless the user also asks for
+IDB changes.
 
-Convert a single function into a fully named, typed, verified unit. The steps below look sequential,
-but in practice you **interleave reading and writing**: understand one thing, commit it, understand
-the next. Do not run Steps 1–2 as a long read and save all the writes for Steps 3–4. The output of
-this skill is IDB edits, not a mental model — if a pass over the function produced no rename, type,
-or comment, you either finished it or you over-analyzed.
+The frontmatter `Stop` hook checks the last response. Before a final response, include a
+short completion audit with the target, write scope, checks run, results, and remaining
+work. If required work remains, the hook blocks stopping and returns the next work.
 
-## Step 1 — One briefing read, then start committing
+## Evidence rule
 
-```
-analyze_function(addr, include_asm=false)   # pseudocode + strings + constants + callers + callees + xrefs
-```
-This one call is your briefing — it's enough to start writing. Pull ground truth *as you need it for a
-specific claim*, not all up front:
-```
-decompile(addr)          # current Hex-Rays hypothesis
-disasm(addr)             # ground truth; paginate with offset/max_instructions for big funcs
-stack_frame(addr)        # current stack layout & sizes
-```
-As you read, **write immediately**: the moment you understand a local, `rename` it; the moment you
-grasp a block, drop a `set_comments` there. Don't finish reading the whole function before the first
-edit. The mental model is a byproduct; the committed names/types/comments are the goal.
+Treat pseudocode, current names, types, and comments as hypotheses. Use disassembly and
+raw bytes as the main static evidence. Check function bounds first if the listing or
+pseudocode is incomplete.
 
-## Step 2 — Identify the function
+## 1. Get one briefing
 
-Rank the evidence, strongest first:
-1. **It's an import/thunk** → `imports_query` already has the real name+prototype. Done.
-2. **Owned strings** → a format string, path, or message names it. `find(target=..., kind=strings)`
-   or read them straight from `analyze_function` output.
-3. **Callee fingerprint** → it calls `malloc`+`memcpy`+`free` in a pattern; a CRC table; a syscall
-   number. `callees(addr)` + naming callees first often reveals the parent.
-4. **Xref pattern** → called once from `main` right after arg parsing → likely `init`/`parse_args`.
-   `xref_query({addr, direction:"to", include_fn:true})`.
-5. **Constants** → magic numbers (`0x9E3779B9` golden ratio, `0x5F3759DF`, poly constants) fingerprint
-   algorithms. `int_convert` to check candidate encodings; never eyeball hex.
+Start with:
 
-Commit the name (or a `?`-hedged comment) only when the evidence is real:
-```
-rename({ func: { addr, name: "parse_config" } })
+```text
+analyze_function({"addr":"<function>","include_asm":false})
 ```
 
-## Step 3 — Set the prototype (return + params + convention)
+Then get only the views needed for the next claim:
 
-The prototype is the highest-leverage edit: it fixes rendering in *every* caller.
-
-1. Confirm the **calling convention** and **return type** from disassembly — see `ida-calling-convention`.
-   Don't accept Hex-Rays' guessed `__fastcall`/`int` blindly.
-2. Confirm **argument count and types** from how each incoming register/stack slot is used before
-   first write (width of access = size; sign of compare = signedness; dereference = pointer).
-3. Apply:
+```text
+decompile({"addr":"<function>"})
+disasm({"addr":"<function>","offset":0,"max_instructions":5000})
+stack_frame({"addrs":["<function>"]})
 ```
-set_type({ addr, signature: "int __fastcall parse_config(Config *cfg, const char *path)" })
-force_recompile(addr)
+
+Page large disassembly results. Do not read unrelated functions for context before the
+current function gives a reason to do so.
+
+## 2. Identify behavior
+
+Use evidence in this order:
+
+1. an import, thunk, export, or known prototype;
+2. owned strings and direct data xrefs;
+3. calls to already known functions;
+4. callers and registration sites;
+5. constants and instruction patterns;
+6. control flow and memory effects.
+
+Use the real `find` schema:
+
+```text
+find({"type":"string","targets":["<text>"]})
+xref_query({"queries":[{"addr":"<function>","direction":"to","include_fn":true}]})
 ```
-Re-read `decompile(addr)`. Arguments should now render with your names/types. If an argument
-vanished or a new one appeared, your count was wrong — reconcile against disasm.
 
-## Step 4 — Name and type the internals
+A string or one caller may suggest a role, but it may not prove the whole role. State the
+strongest supported behavior and list any missing path.
 
-Work top-down through the pseudocode, turning noise into meaning. Batch aggressively.
+In approved write mode, a function rename has this shape:
 
-- **Locals** (Hex-Rays `vN`): `rename({ local: [{func_addr, old:"v3", new:"len"}, ...] })`.
-- **Stack vars** carrying real objects: `declare_stack({ items:[{addr, offset, name, ty}] })` to give
-  them a type, or rename via `rename({ stack: [...] })`. Buffers, saved regs, and structs live here.
-- **Types on locals**: `set_type({ addr, variable:"cfg", ty:"Config *" })` (kind auto-detected).
-- **Globals** touched: `rename({ data:[{old,new}] })`, and type them with `make_data` or `set_type`.
-- **Magic constants → enums/flags**: create the enum once with `enum_upsert`, then render the operand
-  with `set_op_type({ items:[{addr, op_n, kind:"stroff"/"offset", ...}] })` or apply the enum type.
-- **Struct accesses** (`*(a1 + 0x18)`): stop and go to `ida-struct-recovery`; then `set_op_type` with
-  `kind:"stroff"` to make the operand render as `a1->field`.
-
-After each meaningful batch: `force_recompile(addr)` and re-read. Names/types you just set should
-collapse several lines of noise into one readable statement.
-
-## Step 5 — Verify the whole function
-
-- Diff a rename/type live to confirm impact: `diff_before_after(addr, action, action_args)`.
-- Walk the disassembly once more (`disasm`) and check the pseudocode accounts for every branch, every
-  call, and every memory access. Unexplained `disasm` lines = a decompiler gap → `ida-decomp-verify`.
-- Confirm no `__int64`/`_QWORD`/`_DWORD` placeholders remain where a real type is known.
-- Basic-block sanity for gnarly control flow: `basic_blocks(addr)`.
-
-## Step 6 — Leave the trail and propagate
-
+```text
+rename({"batch":{"func":[{"addr":"<function>","name":"parse_config"}]}})
 ```
-set_comments({ items:[{addr, comment:"parse_config: reads KEY=VALUE lines into Config"}] })
+
+Use a certain name only when the evidence supports it. Otherwise keep the old name and,
+if comments are in scope, add a `?` comment with the hypothesis.
+
+## 3. Check the prototype
+
+Use **ida-calling-convention** for the full ABI check. In this function:
+
+1. Find incoming values that are read before replacement.
+2. Check how each value is used and at what width.
+3. Check multiple call sites. Callee code may not reveal unused or trailing parameters.
+4. Check every return path and how callers use the return value.
+5. Look for hidden return buffers, `this` pointers, variadic use, and nonstandard register
+   use.
+
+In write mode, apply a supported prototype and recompile:
+
+```text
+set_type({"edits":[{"addr":"<function>","signature":"int parse_config(Config *cfg, const char *path)"}]})
+force_recompile({"items":[{"addr":"<function>"}]})
 ```
-Then propagate: `force_recompile` on each caller (`xref_query direction:"to"`), re-read them — your
-new prototype/name usually makes several callers instantly clearer, seeding the next targets.
 
-**Fix-on-sight.** While working this function you will often prove an *earlier* commit wrong — a
-callee you named last pass is clearly something else now that you see how it's used here, or a
-prototype you set drops an argument this call site sets up. Fix it the instant you see it:
-`rename`/`set_type` the offending symbol and `force_recompile` it and its neighbours. Do **not**
-note it for later — the wrong name/type is actively corrupting the pseudocode you're reading right
-now, and every function above it inherits the error.
+Then inspect the function and representative callers. A cleaner decompile is useful, but
+it is not proof by itself.
 
-## Fixpoint check
+## 4. Check local and data meaning
 
-Re-run `analyze_function(addr)`. If a full pass produced **no** new name, type, or comment, this
-function is done. Otherwise loop from Step 2 on whatever the pass surfaced.
+Work through:
 
-## Common traps
+- local and stack variables with a real role;
+- globals and pointed-to data;
+- constant flags or enum values;
+- base-plus-offset memory accesses;
+- indirect calls and callback data.
 
-- **Trusting Hex-Rays' argument count** — it drops unused params and invents spilled ones. Count from
-  the register/stack reads in `disasm`.
-- **`__int64` everywhere** — that's "unknown", not "64-bit int". Replace with the real type; it usually
-  shrinks to `int`/pointer once you check the access width.
-- **Signed vs unsigned** — decided by `jl/jg` (signed) vs `jb/ja` (unsigned) and `movsx` vs `movzx` in
-  `disasm`/`insn_query`, not by the decompiler's default.
-- **Renaming on a guess** — if you can't cite the evidence, comment it with `?` instead.
-- **Reading without writing** — if you've read the whole function and made zero edits, you're hoarding
-  findings in your head. Commit them now (names, types, or at minimum comments); understanding that
-  isn't in the IDB doesn't count.
+For struct-like accesses, use **ida-struct-recovery**. For a pseudocode mismatch, use
+**ida-decomp-verify**.
+
+Approved write examples:
+
+```text
+rename({"batch":{"local":[{"func_addr":"<function>","old":"v3","new":"length"}]}})
+declare_stack({"items":[{"addr":"<function>","offset":"-0x20","name":"buffer","ty":"char[32]"}]})
+set_comments({"items":[{"addr":"<instruction>","comment":"Checks the parsed length before copy"}]})
+```
+
+Use `make_data` only when replacing or creating a data item is intended. It may replace an
+existing item, so do not use it as a simple type hint.
+
+After a type or name change that affects pseudocode, call `force_recompile` and read the
+result. Fix a known conflict before going on.
+
+## 5. Verify semantics
+
+Compare pseudocode with disassembly by effect, not one source line per instruction.
+Compiler setup, spills, and address work may not appear as separate pseudocode.
+
+Check:
+
+- every call and indirect transfer;
+- conditional branches and loop exits;
+- memory reads and writes that affect behavior;
+- signedness and width where they change meaning;
+- error and no-return paths;
+- function boundaries and jump-table targets.
+
+Use `basic_blocks` when control flow is hard to see. Use `diff_before_after` only for an
+approved mutation; it is an unsafe mutating helper.
+
+## Done
+
+Finish only when:
+
+- the function's purpose and important side effects are stated with evidence;
+- relevant callers, callees, branches, and data accesses are accounted for;
+- the argument, return, and calling-convention evidence is stated, including uncertainty;
+- approved names, types, stack declarations, and comments were read back after recompile;
+- no known in-scope IDB fact conflicts with the disassembly;
+- the report lists any unresolved path or ambiguous type.
+
+Run one final `analyze_function` check. If it gives new in-scope evidence, continue the
+loop instead of stopping.
