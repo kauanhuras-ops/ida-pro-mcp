@@ -353,3 +353,6 @@ def test_set_type_schema_requires_kind_and_type_but_not_address():
         required = set(edit_schema["required"])
         assert {"kind", "ty"} <= required
         assert "addr" not in required
+        kind_schema = edit_schema["properties"]["kind"]
+        assert kind_schema["type"] == "string"
+        assert set(kind_schema["enum"]) == {"function", "global", "local", "stack"}
