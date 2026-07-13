@@ -93,6 +93,11 @@ the cluster. Correct the layout the moment new evidence lands, then keep going.
 
 ## Step 5 — C++ vtables and classes
 
+> For real C++ targets (MSVC/GCC) with RTTI, mangled names, or many virtual calls, use the dedicated
+> **ida-cpp-rtti** skill — it seeds whole classes from constructors + RTTI (size, fields, method
+> names, inheritance) far faster than deriving each field by hand. The quick recipe below suffices for
+> a one-off vtable or an RTTI-stripped object.
+
 1. A struct whose **offset 0 is a pointer to an array of code pointers** is a polymorphic object; that
    array is the vtable.
 2. Recover the vtable as its own struct of function pointers: read the pointer array (`get_bytes` /

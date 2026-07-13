@@ -54,15 +54,23 @@ Library code (CRT, STL, statically-linked OSS) is noise you must not hand-revers
 
 ## Step 4 — Seed targets from BOTH ends (not just top-down)
 
+> 🪤 **`WinMain`/`main`-first is a trap — do NOT start there.** In a real event-driven app `WinMain`
+> is mostly CRT glue plus a message loop; the actual logic runs in callbacks it never directly calls,
+> and you'll burn the first hour on plumbing. Start from leverage (imports already typed, allocation
+> sizes, high-fan-in leaves, string anchors), not from the top of `WinMain`. Treat `WinMain` as *one*
+> root among many, reached in due course — not the entry to your analysis.
+
 Real programs are not one call tree. Seed from all of:
 
-**Code, top-down:** the real entry point, all exports, `WinMain`/`main`, and — critically —
-**callback-reached code the call graph misses**: window procedures (xrefs to `RegisterClass*` /
-`SetWindowLongPtr`), dialog procs, thread routines (`CreateThread`), TLS callbacks, COM vtable
-methods, and callback-taking APIs (`EnumWindows`, `qsort`). Find these by xref'ing the relevant
-imports and treating each callback argument as a root (`ida-cluster-analysis`).
+**Code:** the real entry point, all exports, and — critically — **callback-reached code the call graph
+misses**: window procedures (xrefs to `RegisterClass*` / `SetWindowLongPtr`), dialog procs, thread
+routines (`CreateThread`), TLS callbacks, COM vtable methods, and callback-taking APIs (`EnumWindows`,
+`qsort`). Find these by xref'ing the relevant imports and treating each callback argument as a root
+(`ida-cluster-analysis`). `WinMain`/`main` is in this set too, but it is not privileged — do not lead
+with it.
 
-**Data, bottom-up:** allocation-site-driven struct discovery — Step 5.
+**Data, bottom-up:** allocation-site-driven struct discovery — Step 5. On C++/MSVC targets, prefer
+seeding structs from **constructors** — see `ida-cpp-rtti`.
 
 ## Step 5 — Allocation-driven struct discovery (your idea, refined)
 

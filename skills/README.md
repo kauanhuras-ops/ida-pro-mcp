@@ -24,6 +24,7 @@ routes to the rest.
 | **ida-function-recon** | One function → fully worked up | "What does this function do", "clean up / type this function" |
 | **ida-cluster-analysis** | Groups of functions; clustering | "Map this subsystem", "group these functions", "what touches g_state" |
 | **ida-struct-recovery** | Structs, classes, vtables, unions | Pseudocode full of `*(a1 + 0x18)`; a threaded context/`this` pointer |
+| **ida-cpp-rtti** | C++ classes via constructors/RTTI/vtables | MSVC/GCC C++: vftable writes, virtual calls, mangled names |
 | **ida-decomp-verify** | Find/fix decompiler errors vs disasm | Pseudocode looks wrong (phantom args, dropped code, `__int64` soup) |
 | **ida-calling-convention** | Confirm convention + args + return type | Before committing any prototype; arguments render wrong |
 | **ida-dynamic-verify** | Confirm facts by RUNNING it (debugger) | Real size/args/data/indirect targets you can't settle statically (unsafe, opt-in) |
@@ -36,6 +37,7 @@ ida-re-methodology                    (survey → pick target → route → iter
     ├── ida-function-recon            single function loop
     │       ├── ida-calling-convention   confirm prototype from disasm
     │       ├── ida-struct-recovery      resolve *(base + N) into fields
+    │       │       └── ida-cpp-rtti     C++: seed classes from ctors/RTTI/vtables
     │       └── ida-decomp-verify        QA the pseudocode against the bytes
     ├── ida-cluster-analysis          groups: discover → analyze_component → shared types → leaves→roots
     │       └── (reuses all of the above per member function)

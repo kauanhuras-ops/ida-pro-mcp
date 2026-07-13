@@ -111,6 +111,7 @@ until the function is done. Never let the bracket run more than once without a m
 | Understand/finish ONE function | **ida-function-recon** | `analyze_function`, `decompile`, `disasm` |
 | Understand a subsystem / group | **ida-cluster-analysis** | `callgraph`, `analyze_component`, `func_query` |
 | Recover a struct/class/vtable | **ida-struct-recovery** | `read_struct`, `declare_type`, `set_op_type` |
+| Recover C++ classes (RTTI/vtables) | **ida-cpp-rtti** | `find_regex`, `xref_query`, `declare_type`, `rename` |
 | Decompiler output looks wrong | **ida-decomp-verify** | `disasm`, `decompile`, `insn_query` |
 | Confirm convention/return type | **ida-calling-convention** | `disasm`, `insn_query`, `set_type` |
 | Confirm real size/args/data by running | **ida-dynamic-verify** | `dbg_start`, `dbg_add_bp`, `dbg_read`, `dbg_regs_named` |
