@@ -1,4 +1,4 @@
-"""Tests for per-session output format preferences."""
+"""Tests for worker-scoped output format preferences."""
 
 import json
 
@@ -9,22 +9,21 @@ from ..toon_out import (
     VALID_FORMATS,
     TOON_ENABLED,
     TOON_EXEMPT_TOOLS,
-    _OUTPUT_FORMAT_OVERRIDES,
     resolve_use_toon,
     should_toon,
     to_llm_text,
 )
 
 
-def _reset_session():
-    """Drop any leftover override for the test session."""
+def _reset_worker():
+    """Drop any leftover override for the test worker."""
     set_output_format("auto")
 
 
 @test()
 def test_default_is_toon_after_reset():
-    """A fresh session (or one reverted to 'auto') gets TOON by default."""
-    _reset_session()
+    """A worker reverted to 'auto' gets TOON by default."""
+    _reset_worker()
     info = get_output_format()
     assert info["effective"] == "toon", info
     assert resolve_use_toon() is True
@@ -33,7 +32,7 @@ def test_default_is_toon_after_reset():
 @test()
 def test_set_to_json_flips_effective_format():
     """set_output_format('json') makes subsequent calls render as JSON."""
-    _reset_session()
+    _reset_worker()
     result = set_output_format("json")
     assert result == {"format": "json", "effective": "json"}, result
     assert resolve_use_toon() is False
@@ -46,10 +45,10 @@ def test_set_to_json_flips_effective_format():
 def test_set_to_toon_forces_toon_even_when_global_off():
     """An explicit 'toon' override wins over the global flag.
 
-    Simulates the operator disabling TOON globally (env var) and a session
+    Simulates the operator disabling TOON globally (env var) and a worker
     still requesting TOON: the override must win.
     """
-    _reset_session()
+    _reset_worker()
     # Even if TOON_ENABLED were False in this process, an explicit 'toon'
     # override would force TOON. We can't easily flip TOON_ENABLED at runtime,
     # so we just verify the override is honored and effective reflects it.
@@ -63,7 +62,7 @@ def test_set_to_toon_forces_toon_even_when_global_off():
 @test()
 def test_auto_reverts_to_global_default():
     """set_output_format('auto') clears the override."""
-    _reset_session()
+    _reset_worker()
     set_output_format("json")
     assert resolve_use_toon() is False
     result = set_output_format("auto")
@@ -77,7 +76,7 @@ def test_auto_reverts_to_global_default():
 @test()
 def test_invalid_format_returns_error_in_tool():
     """set_output_format rejects unknown formats via the tool surface."""
-    _reset_session()
+    _reset_worker()
     result = set_output_format("yaml")
     assert "error" in result, result
     assert "Invalid format" in result["error"]
@@ -93,50 +92,42 @@ def test_valid_formats_constant_lists_supported_values():
 
 
 @test()
-def test_concurrent_sessions_have_independent_state():
-    """Two different session ids must not see each other's overrides.
+def test_client_sessions_share_worker_state():
+    """Two client sessions routed to one worker share its override.
 
-    Simulates two agents connecting concurrently by swapping the current
-    transport session id between calls. Each agent's override must be
-    isolated.
+    The transport session id must have no effect on output format. Process
+    boundaries, not client or database ids, isolate worker settings.
     """
     from .. import rpc
 
-    # Ensure a clean baseline for any session that happens to be current.
+    # Ensure a clean worker baseline.
     set_output_format("auto")
 
     old_sid = rpc.MCP_SERVER.get_current_transport_session_id()
     try:
-        # Agent A: opts into JSON.
+        # Agent A sets the worker to JSON.
         rpc.MCP_SERVER._transport_session_id.data = "http:agent-A"
         set_output_format("json")
         info_A = get_output_format()
         assert info_A["effective"] == "json", info_A
 
-        # Agent B: stays on the default (TOON).
+        # Agent B on the same worker must see JSON too.
         rpc.MCP_SERVER._transport_session_id.data = "http:agent-B"
         info_B = get_output_format()
-        assert info_B["override"] is None, info_B
-        assert info_B["effective"] == "toon", info_B
+        assert info_B["override"] == "json", info_B
+        assert info_B["effective"] == "json", info_B
 
-        # Agent B switches to JSON too — must not affect Agent A's snapshot.
-        set_output_format("json")
+        # Agent B switches the worker to TOON.
+        set_output_format("toon")
         info_B2 = get_output_format()
-        assert info_B2["effective"] == "json", info_B2
+        assert info_B2["effective"] == "toon", info_B2
 
-        # Back to A — must still be JSON.
+        # Agent A must now see the same worker-wide TOON setting.
         rpc.MCP_SERVER._transport_session_id.data = "http:agent-A"
         info_A2 = get_output_format()
-        assert info_A2["override"] == "json", info_A2
-        assert info_A2["effective"] == "json", info_A2
-
-        # The override table must contain an entry for each agent.
-        assert "http:agent-A" in _OUTPUT_FORMAT_OVERRIDES, _OUTPUT_FORMAT_OVERRIDES
-        assert "http:agent-B" in _OUTPUT_FORMAT_OVERRIDES, _OUTPUT_FORMAT_OVERRIDES
+        assert info_A2["override"] == "toon", info_A2
+        assert info_A2["effective"] == "toon", info_A2
     finally:
-        # Clean up so we don't leak entries between tests.
-        _OUTPUT_FORMAT_OVERRIDES.pop("http:agent-A", None)
-        _OUTPUT_FORMAT_OVERRIDES.pop("http:agent-B", None)
         rpc.MCP_SERVER._transport_session_id.data = old_sid
         set_output_format("auto")
 
@@ -152,7 +143,7 @@ def test_management_tool_keeps_json_in_toon_mode():
 
     They form the stable JSON control plane so strict clients (e.g. Pi Agent,
     which validates outputSchema -> structuredContent) can always parse health
-    and format-switch responses, even when the session is in TOON mode. Pi Agent
+    and format-switch responses, even when the worker is in TOON mode. Pi Agent
     calls set_output_format('json') up front and subsequent analysis calls come
     back as JSON; Claude Code stays on the TOON default.
     """
@@ -231,7 +222,7 @@ def test_analysis_tool_drops_structured_content_in_toon_mode():
 
 @test()
 def test_should_toon_exempts_management_tools():
-    """should_toon exempts management tools and follows the session preference."""
+    """should_toon exempts management tools and follows the worker preference."""
     set_output_format("auto")  # TOON default
     try:
         assert resolve_use_toon() is True
@@ -301,28 +292,27 @@ def test_tools_call_preserves_structured_content_in_json_mode():
 
 
 @test()
-def test_to_llm_text_is_session_aware_not_global():
-    """to_llm_text must follow the per-session override, not the global flag.
+def test_to_llm_text_follows_worker_override_not_only_global():
+    """to_llm_text must follow the worker override, not only the global flag.
 
     Regression guard: in the oversized branch of rpc.py, to_llm_text is called
-    directly. If it consulted the global TOON_ENABLED, a session that opted
-    into JSON would still receive TOON-encoded text — and end up with both
-    JSON (structuredContent) and TOON (text) in the same response.
+    directly. If it consulted only the global TOON_ENABLED, a worker set to
+    JSON would get JSON (structuredContent) and TOON (text) together.
     """
     obj = {"name": "main", "addr": "0x401000"}
 
     set_output_format("auto")  # follow global
     auto_text = to_llm_text(obj)
-    # Default global is TOON, so the auto-session text must NOT be plain JSON.
+    # Default global is TOON, so auto text must NOT be plain JSON.
     assert auto_text != json.dumps(obj, separators=(",", ":")), auto_text
 
     set_output_format("json")
     try:
         json_text = to_llm_text(obj)
-        # Session is JSON: must be plain compact JSON, regardless of the global
+        # Worker is JSON: must be plain compact JSON, regardless of the global
         # flag. If this fails with the global still on, we have the bug back.
         assert json_text == json.dumps(obj, separators=(",", ":")), (
-            f"to_llm_text ignored the session override and produced "
+            f"to_llm_text ignored the worker override and produced "
             f"{json_text!r} (global TOON_ENABLED={TOON_ENABLED})"
         )
     finally:
