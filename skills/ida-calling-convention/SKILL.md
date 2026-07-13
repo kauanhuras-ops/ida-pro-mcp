@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-calling-convention task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: platform ABI;
             incoming locations and call sites; parameter types; return paths; hidden or
-            special arguments; approved prototype read-back; open ABI doubt. Return
+            special arguments; debug-string naming evidence; approved prototype read-back;
+            open ABI doubt. Return
             {"ok": true} only if the message names the target and write scope and marks
             every checklist item pass or n/a with concrete evidence, with no required work
             left; or states a real blocker needing user input, approval, or external state
@@ -41,6 +42,11 @@ The hook blocks a stop when any required item is unproved.
 The current prototype and Hex-Rays argument list are hypotheses. Use the binary's
 platform ABI, callee use, several call sites, return paths, and caller use together. One
 register value at one call site is not enough to prove a parameter.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Identify the ABI
 
@@ -165,6 +171,8 @@ argument positions. State the uncertainty or keep the safer current type.
 Finish only when:
 
 - the platform ABI is named;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - used incoming locations and representative call sites agree;
 - parameter count limits and unused-parameter uncertainty are stated;
 - each claimed parameter type has width and use evidence;

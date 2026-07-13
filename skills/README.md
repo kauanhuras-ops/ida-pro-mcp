@@ -39,6 +39,10 @@ Every skill also follows these rules.
    comments as hypotheses. Use disassembly and raw bytes as the main static evidence.
    Check function bounds and instruction decoding when they are in doubt. A runtime
    observation is strong evidence for that run, but it does not prove all inputs or runs.
+   Debug and diagnostic strings are naming evidence. When a string is tied to the same
+   code or value by an xref, call argument, or data flow and exposes an original function,
+   method, parameter, local, field, or global identifier, use its exact spelling instead
+   of inventing a name and record the string address. State any ambiguity or conflict.
 3. **Respect write scope.** A request to explain or review is read-only unless the user
    also asks for IDB changes. For approved IDB work, write only supported names, types,
    and comments. Record an uncertain idea as a `?` comment only when comments are in

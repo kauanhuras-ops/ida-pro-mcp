@@ -9,8 +9,9 @@ hooks:
             Decide whether Claude may stop the active ida-dynamic-verify task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: execution approval
             and run context; static hypothesis and live result; observation limits;
-            address rebase; approved IDB writes and read-back; debuggee state; final
-            verdict. Return {"ok": true} only if the message names the target, approval,
+            address rebase; debug-string naming evidence; approved IDB writes and read-back;
+            debuggee state; final verdict. Return {"ok": true} only if the message names
+            the target, approval,
             and write scope and marks every checklist item pass or n/a with concrete
             evidence, with no required work left; or states a real blocker needing user
             input, approval, or external state and asks a direct question. Return
@@ -63,6 +64,11 @@ several breakpoints, conditions, or memory reads in one call.
 Registers and memory at a breakpoint are direct evidence for that process, input, thread,
 and time. They do not prove all runs. Read the static instruction too: it gives the access
 width and operation that the live value is taking part in.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. State a testable hypothesis
 
@@ -193,6 +199,8 @@ change.
 Finish only when:
 
 - the target, input, environment, thread, and evidence instruction are stated;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - the static hypothesis and live observation are both recorded;
 - the limits of the observation are stated;
 - every runtime address used for a static claim was rebased and range-checked;

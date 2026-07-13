@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-sdk-types task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: API identity and
             evidence; exact target and SDK source; prototypes; structs and bitmask flags;
-            COM slot order; approved writes and read-back; open version or mapping gaps.
+            COM slot order; debug-string naming evidence; approved writes and read-back;
+            open version or mapping gaps.
             Return {"ok": true} only if the message names the target and write scope and
             marks every checklist item pass or n/a with concrete evidence, with no required
             work left; or states a real blocker needing user input, approval, or external
@@ -46,6 +47,11 @@ names an import but does not apply the full SDK prototype, the referenced struct
 COM slot types. That gap is this skill's work. The SDK version matters: apply a prototype or
 struct only when the module and its version fit, then confirm the struct against observed
 offsets and widths.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Identify the API
 
@@ -173,6 +179,8 @@ runtime, confirm the slot target is in the expected module, then rebase before r
 Finish only when:
 
 - each named API states its evidence source (import, ordinal map, GUID, or checked behavior);
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - each prototype uses the correct SDK types and convention;
 - in read-only mode, referenced structs and bitmask flags have exact proposed declarations;
   every observed offset and value matches the bytes;

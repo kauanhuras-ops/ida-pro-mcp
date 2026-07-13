@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-struct-recovery task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: member offset, width,
             use, and type evidence; gaps and overlays; size bounds; owner set and applied
-            types; approved writes and read-back; conflicts and open layout questions.
+            types; debug-string naming evidence; approved writes and read-back; conflicts
+            and open layout questions.
             Return {"ok": true} only if the message names the target and write scope and
             marks every checklist item pass or n/a with concrete evidence, with no required
             work left; or states a real blocker needing user input, approval, or external
@@ -42,6 +43,11 @@ Decompiler expressions and current types are hypotheses. Use decoded memory oper
 access widths, calls, and data flow as static evidence. First check that the same base
 value reaches each access. A runtime observation applies to the observed object and path
 only.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Collect accesses
 
@@ -183,6 +189,8 @@ evidence proves the full extent.
 Finish only when:
 
 - each claimed member has offset, width, action, and type evidence;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - gaps, unions, arrays, embedded objects, and padding are not hidden by certain names;
 - size claims are marked exact, upper bound, or lower bound;
 - the owner set and all applied pointer types are listed;

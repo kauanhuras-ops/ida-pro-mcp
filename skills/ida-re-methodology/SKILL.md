@@ -8,8 +8,9 @@ hooks:
           prompt: >-
             Decide whether Claude may stop the active ida-re-methodology task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: exact target and
-            scope; every goal item; evidence for each claim; approved writes and read-back;
-            conflict check; uncertainty and final report. Return {"ok": true} only if the
+            scope; every goal item; evidence for each claim; debug-string naming evidence;
+            approved writes and read-back; conflict check; uncertainty and final report.
+            Return {"ok": true} only if the
             message names the target and write scope and marks every checklist item pass or
             n/a with concrete evidence, with no required work left; or states a real
             blocker needing user input, approval, or external state and asks a direct
@@ -49,6 +50,11 @@ Treat decompiler output, auto-analysis, names, types, and comments as hypotheses
 disassembly and raw bytes as the main static evidence. If function bounds, code/data
 classification, or decoding look wrong, verify or repair them before using the listing.
 Runtime evidence applies to the observed run and input only.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## Start and route
 
@@ -141,6 +147,8 @@ This is a guide, not a reason to leave the user's target. Keep the goal scope fi
 Finish only when all goal checks pass:
 
 - every item named by the goal was checked;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - each reported claim has stated evidence;
 - all approved IDB changes were recompiled and read back;
 - no known in-scope name, type, prototype, field, or comment conflicts with the evidence;

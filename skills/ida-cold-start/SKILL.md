@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-cold-start task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: analysis state and
             platform; bounded entry-path kinds; external boundaries; ranked first targets;
-            allocation evidence; approved writes and read-back; open risks. Return
+            allocation evidence; debug-string naming evidence; approved writes and
+            read-back; open risks. Return
             {"ok": true} only if the message names the target and write scope and marks
             every checklist item pass or n/a with concrete evidence, with no required work
             left; or states a real blocker needing user input, approval, or external state
@@ -40,6 +41,11 @@ The hook blocks a stop when any required item is unproved.
 Treat auto-analysis, decompiler output, names, types, and comments as hypotheses. Use
 disassembly, raw bytes, file metadata, imports, and xrefs as static evidence. Check
 function bounds and code/data classification when they look wrong.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Make one survey
 
@@ -164,6 +170,8 @@ headers, or trailing data.
 Finish only when:
 
 - auto-analysis is ready and the platform and ABI are stated;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - the goal's entry-path kinds are checked: loader entry, exports, TLS or framework starts,
   and callbacks registered by in-scope code where applicable; any unsearched kind or bound
   is stated;

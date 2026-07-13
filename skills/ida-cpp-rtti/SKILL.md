@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-cpp-rtti task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: class and RTTI or
             structural evidence; size bounds; slot evidence; object ABI; bases and VFTs;
-            approved writes and read-back; open fields or slots. Return {"ok": true} only
+            debug-string naming evidence; approved writes and read-back; open fields or
+            slots. Return {"ok": true} only
             if the message names the target and write scope and marks every checklist item
             pass or n/a with concrete evidence, with no required work left; or states a
             real blocker needing user input, approval, or external state and asks a direct
@@ -43,6 +44,11 @@ are still hypotheses. Check each one against disassembly: the constructor writes
 loads, and the object ABI. A constructor is the richest single seed, but its writes alone
 do not prove that no later or read-only field exists. Use `ida-struct-recovery` discipline
 for the layout and `ida-calling-convention` for the object ABI.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Use existing analysis, then check it
 
@@ -212,6 +218,8 @@ Finish only when:
 
 - each recovered class names its evidence: RTTI or structural detection, plus constructor,
   destructor, helper, or other object-use evidence when present;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - size claims are marked exact, upper bound, or lower bound, not assumed from the
   constructor alone;
 - each named method slot has behavior or symbol evidence, and unknown slots keep neutral

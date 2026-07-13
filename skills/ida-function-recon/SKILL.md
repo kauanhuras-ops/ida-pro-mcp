@@ -8,8 +8,9 @@ hooks:
           prompt: >-
             Decide whether Claude may stop the active ida-function-recon task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: role and side effects;
-            callers, callees, branches, and data; ABI; approved writes and read-back;
-            conflict check; unresolved paths; final analyze_function check. Return
+            callers, callees, branches, and data; ABI; debug-string naming evidence;
+            approved writes and read-back; conflict check; unresolved paths; final
+            analyze_function check. Return
             {"ok": true} only if the message names the target and write scope and marks
             every checklist item pass or n/a with concrete evidence, with no required work
             left; or states a real blocker needing user input, approval, or external state
@@ -42,6 +43,15 @@ The hook blocks a stop when any required item is unproved.
 Treat pseudocode, current names, types, and comments as hypotheses. Use disassembly and
 raw bytes as the main static evidence. Check function bounds first if the listing or
 pseudocode is incomplete.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
+
+For example, `"Renderer::Draw: vertexCount=%u"` gives the exact method name
+`Renderer::Draw` and the value name `vertexCount` after the xref and argument map are
+checked. Do not replace them with invented names such as `draw_mesh` or `count`.
 
 ## 1. Get one briefing
 
@@ -179,6 +189,8 @@ approved mutation; it is an unsafe mutating helper and cannot run through genera
 Finish only when:
 
 - the function's purpose and important side effects are stated with evidence;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - relevant callers, callees, branches, and data accesses are accounted for;
 - the argument, return, and calling-convention evidence is stated, including uncertainty;
 - approved names, types, stack declarations, and comments were read back after recompile;

@@ -9,7 +9,8 @@ hooks:
             Decide whether Claude may stop the active ida-cluster-analysis task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: scope and graph
             bounds; member and exclusion reasons; entry, exit, and indirect paths; shared
-            data; member checks; approved writes and group read-back; open edges. Return
+            data; debug-string naming evidence; member checks; approved writes and group
+            read-back; open edges. Return
             {"ok": true} only if the message names the target and write scope and marks
             every checklist item pass or n/a with concrete evidence, with no required work
             left; or states a real blocker needing user input, approval, or external state
@@ -42,6 +43,11 @@ Treat call graphs, decompiler output, current names, types, and comments as hypo
 Direct-call graphs miss callbacks and other indirect edges. Check important membership
 and boundary claims in disassembly, registration sites, data xrefs, or approved runtime
 evidence.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Build a candidate member set
 
@@ -160,6 +166,8 @@ Do not call an edge “unrelated” only because its current name is different.
 Finish only when:
 
 - the member list follows the goal's stated admission rule and bounds;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - every checked boundary neighbor is included or excluded with a stated reason;
 - entry, exit, direct, callback, and known indirect paths are mapped;
 - shared types, globals, enums, and constants have evidence;

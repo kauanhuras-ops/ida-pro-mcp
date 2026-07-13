@@ -8,8 +8,9 @@ hooks:
           prompt: >-
             Decide whether Claude may stop the active ida-decomp-verify task. Review
             $ARGUMENTS, especially last_assistant_message. Checklist: calls, transfers, and
-            memory effects; ABI rendering; widths and signs; function bounds; approved
-            fixes and read-back; remaining decompiler loss. Return {"ok": true} only if
+            memory effects; ABI rendering; widths and signs; function bounds;
+            debug-string naming evidence; approved fixes and read-back; remaining
+            decompiler loss. Return {"ok": true} only if
             the message names the target and write scope and marks every checklist item
             pass or n/a with concrete evidence, with no required work left; or states a
             real blocker needing user input, approval, or external state and asks a direct
@@ -41,6 +42,11 @@ The hook blocks a stop when any required item is unproved.
 Pseudocode, current names, types, comments, and even current function bounds are
 hypotheses. Use disassembly and raw bytes as the main static evidence. If decoding or
 code/data boundaries are wrong, repair or account for that before blaming the decompiler.
+
+Debug and diagnostic strings are naming evidence. When a string is tied to the same code
+or value by an xref, call argument, or data flow and exposes an original function, method,
+parameter, local, field, or global identifier, use its exact spelling instead of inventing
+a name and record the string address. State any ambiguity or conflict.
 
 ## 1. Make a semantic comparison
 
@@ -138,6 +144,8 @@ Finish only when:
 
 - every behavior-changing call, transfer, branch, and memory effect is represented or
   explained;
+- each in-scope debug-string identifier was used exactly, or any ambiguity or conflict was
+  stated, with the string address;
 - argument and return rendering agrees with checked ABI evidence;
 - important widths and signed operations agree;
 - function bounds and jump targets are sound for the checked scope;
