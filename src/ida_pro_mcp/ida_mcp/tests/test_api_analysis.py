@@ -16,6 +16,7 @@ from ..framework import (
     get_data_address,
     get_unmapped_address,
 )
+from .. import compat
 from ..api_analysis import (
     decompile,
     disasm,
@@ -77,7 +78,7 @@ def test_decompile_batch_addresses():
     """multiple valid function addresses can all be decompiled individually."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.functions())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than two functions")
 
@@ -136,7 +137,7 @@ def test_disasm_valid_function():
                 {
                     "name": str,
                     "start_ea": is_hex_address,
-                    "lines": list,
+                    "lines": str,
                 }
             ),
             "instruction_count": int,
@@ -157,7 +158,7 @@ def test_disasm_main_contains_expected_calls():
     asm = result["asm"]
     assert asm["name"] == "main"
     assert asm["start_ea"] == CRACKME_MAIN
-    lines_text = " ".join(item["instruction"] for item in asm["lines"])
+    lines_text = asm["lines"]
     assert "check_pw" in lines_text
     assert "_puts" in lines_text
     assert result["instruction_count"] > 0
@@ -226,7 +227,7 @@ def test_disasm_interior_address_preserves_cursor():
     if not fn_addr:
         skip_test("binary has no functions")
 
-    func = idaapi.get_func(int(fn_addr, 16))
+    func = compat.get_func(int(fn_addr, 16))
     if not func:
         skip_test("IDA could not resolve function object")
 
@@ -263,144 +264,49 @@ def test_decompile_refs_decode_usage_string():
 
 
 @test(binary="crackme03.elf")
-def test_disasm_labels_populated():
-    """disasm populates `label` on the function head and on branch targets."""
+def test_disasm_compact_lines_preserve_symbol_names():
+    """The compact text keeps the function name in metadata and local labels in operands."""
     result = disasm(CRACKME_MAIN, max_instructions=200)
     assert_ok(result, "asm")
-    lines = result["asm"]["lines"]
-    first = lines[0]
-    assert first["addr"] == CRACKME_MAIN.removeprefix("0x")
-    assert first.get("label") == "main"
-    # At least one interior branch-target label should be present
-    interior_labels = [ln["label"] for ln in lines[1:] if "label" in ln]
-    assert interior_labels, "expected at least one interior label (e.g. loc_...)"
+    asm = result["asm"]
+    assert isinstance(asm["lines"], str)
+    assert asm["name"] == "main"
+    assert "loc_" in asm["lines"]
 
 
 @test(binary="crackme03.elf")
 def test_disasm_resolves_call_target():
-    """disasm resolves `call check_pw` to a ref pointing at CRACKME_CHECK_PW."""
+    """The compact listing and callee metadata resolve the check_pw call target."""
     result = disasm(CRACKME_MAIN, max_instructions=200)
     assert_ok(result, "asm")
-    call_line = next(
-        (ln for ln in result["asm"]["lines"] if ln["addr"] == CRACKME_CALL_TO_CHECK_PW.removeprefix("0x")),
-        None,
-    )
-    assert call_line is not None, "missing expected call-to-check_pw line"
-    refs = call_line.get("refs", [])
-    hit = next((r for r in refs if r["name"] == "check_pw"), None)
-    assert hit is not None, f"check_pw not in refs: {refs}"
-    assert hit["addr"] == CRACKME_CHECK_PW
+    asm = result["asm"]
+    assert "check_pw" in asm["lines"]
+    assert "check_pw" in asm.get("callees", [])
 
 
 @test(binary="crackme03.elf")
 def test_disasm_branch_ref_uses_local_label():
-    """A branch to an in-function label must resolve to the label, not `main`."""
+    """An in-function branch is rendered with a compact local-label operand."""
     result = disasm(CRACKME_MAIN, max_instructions=200)
     assert_ok(result, "asm")
-    branch_refs = [
-        r
-        for ln in result["asm"]["lines"]
-        for r in ln.get("refs", [])
-        if r["name"].startswith("loc_")
-    ]
-    assert branch_refs, "expected at least one loc_* branch ref inside main"
-    for ref in branch_refs:
-        assert ref["name"] != "main", f"containing function leaked into ref: {ref}"
+    assert "loc_" in result["asm"]["lines"]
 
 
 @test(binary="crackme03.elf")
 def test_disasm_resolves_data_ref():
-    """disasm resolves a load of the usage string to a data ref with its symbol."""
+    """disasm returns decoded function string references in compact header metadata."""
     result = disasm(CRACKME_MAIN, max_instructions=200)
     assert_ok(result, "asm")
-    hits = [
-        r
-        for ln in result["asm"]["lines"]
-        for r in ln.get("refs", [])
-        if r["addr"] == CRACKME_USAGE_STRING
-    ]
-    assert hits, "expected a data ref to the usage string"
-
-
-@test(binary="crackme03.elf")
-def test_disasm_captures_comments():
-    """disasm surfaces a user-set comment on an instruction line."""
-    import ida_bytes
-
-    ea = int(CRACKME_CALL_TO_CHECK_PW, 16)
-    marker = "mcp-test-comment"
-    prev = ida_bytes.get_cmt(ea, False)
-    try:
-        ida_bytes.set_cmt(ea, marker, False)
-        result = disasm(CRACKME_MAIN, max_instructions=200)
-        assert_ok(result, "asm")
-        line = next(
-            (ln for ln in result["asm"]["lines"] if ln["addr"] == CRACKME_CALL_TO_CHECK_PW.removeprefix("0x")),
-            None,
-        )
-        assert line is not None
-        assert marker in line.get("comments", []), f"comment missing: {line}"
-    finally:
-        ida_bytes.set_cmt(ea, prev or "", False)
-
-
-@test(binary="crackme03.elf")
-def test_disasm_captures_repeatable_and_extra_comments():
-    """disasm surfaces repeatable comments and anterior/posterior extra comments."""
-    import ida_bytes
-    import ida_lines
-
-    ea = int(CRACKME_CALL_TO_CHECK_PW, 16)
-    prev_rep = ida_bytes.get_cmt(ea, True)
-    try:
-        ida_bytes.set_cmt(ea, "rep-marker", True)
-        ida_lines.update_extra_cmt(ea, ida_lines.E_PREV, "ante-marker-0")
-        ida_lines.update_extra_cmt(ea, ida_lines.E_PREV + 1, "ante-marker-1")
-        ida_lines.update_extra_cmt(ea, ida_lines.E_NEXT, "post-marker")
-
-        result = disasm(CRACKME_MAIN, max_instructions=200)
-        assert_ok(result, "asm")
-        line = next(
-            (
-                ln
-                for ln in result["asm"]["lines"]
-                if ln["addr"] == CRACKME_CALL_TO_CHECK_PW.removeprefix("0x")
-            ),
-            None,
-        )
-        assert line is not None
-        comments = line.get("comments", [])
-        for marker in ("rep-marker", "ante-marker-0", "ante-marker-1", "post-marker"):
-            assert marker in comments, f"{marker} missing: {comments}"
-        # Ordering contract: anterior (multi-line, in order) -> inline -> posterior
-        assert (
-            comments.index("ante-marker-0")
-            < comments.index("ante-marker-1")
-            < comments.index("rep-marker")
-            < comments.index("post-marker")
-        )
-    finally:
-        ida_bytes.set_cmt(ea, prev_rep or "", True)
-        ida_lines.del_extra_cmt(ea, ida_lines.E_PREV)
-        ida_lines.del_extra_cmt(ea, ida_lines.E_PREV + 1)
-        ida_lines.del_extra_cmt(ea, ida_lines.E_NEXT)
+    strings = result["asm"].get("strings", [])
+    assert any("Need exactly" in value for value in strings), strings
 
 
 @test(binary="crackme03.elf")
 def test_disasm_ref_decodes_string_literal():
-    """A data ref targeting a string literal carries the decoded bytes."""
+    """The compact disassembly header carries decoded string literals."""
     result = disasm(CRACKME_MAIN, max_instructions=200)
     assert_ok(result, "asm")
-    usage_refs = [
-        r
-        for ln in result["asm"]["lines"]
-        for r in ln.get("refs", [])
-        if r["addr"] == CRACKME_USAGE_STRING
-    ]
-    assert usage_refs, "expected a ref to the usage string"
-    with_string = [r for r in usage_refs if "string" in r]
-    assert with_string, f"no ref carried a decoded string: {usage_refs}"
-    assert "Need exactly" in with_string[0]["string"]
+    assert any("Need exactly" in value for value in result["asm"].get("strings", []))
 
 
 @test(binary="crackme03.elf")
@@ -452,7 +358,7 @@ def _find_address_without_xrefs() -> str | None:
     import idautils
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if seg is None:
             continue
         for head in idautils.Heads(seg.start_ea, min(seg.end_ea, seg.start_ea + 0x4000)):
@@ -582,7 +488,7 @@ def test_callees_multiple():
     """callees accepts multiple addresses and returns one result per input."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.functions())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than two functions")
 

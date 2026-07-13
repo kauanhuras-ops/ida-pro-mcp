@@ -10,7 +10,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 - [Python](https://www.python.org/downloads/) (**3.11 or higher**)
   - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
+- [IDA Pro](https://hex-rays.com/ida-pro) (**9.4 or higher**), **IDA Free is not supported**
 - Supported MCP Client (pick one you like)
   - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
   - [Augment Code](https://www.augmentcode.com/)
@@ -56,9 +56,9 @@ claude plugin update ida-pro-mcp@mrexodia
 
 ```bash
 # windows
-uv run "C:\Program Files\IDA Professional 9.3\idalib\python\py-activate-idalib.py"
+uv run "C:\Program Files\IDA Professional 9.4\idalib\python\py-activate-idalib.py"
 # macos
-uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
+uv run "/Applications/IDA Professional 9.4.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
 ```
 
 ## Installation (GUI)
@@ -252,28 +252,29 @@ Worker controls:
 - `ida://export/{name}` - Export details by name
 - `ida://xrefs/from/{addr}` - Cross-references from address
 
-## IDA 9 API Migration Notes
+## IDA 9.4 Python API Notes
 
-IDA 9 reorganised several long-standing Python API entry points. Code that
-worked against IDA 7/8 will frequently raise `AttributeError` against IDA 9.
-Use this table when writing `py_eval` / `py_exec_file` snippets:
+The server and its examples target IDA 9.4. Use the address-based 9.4 APIs in
+`py_eval` / `py_exec_file` snippets; several pointer-based forms still run but
+emit deprecation warnings.
 
-| IDA 7/8 (broken in 9)                | IDA 9 (current)                                                |
-| ------------------------------------ | -------------------------------------------------------------- |
-| `ida_typeinf.get_tinfo(tif, ea)`     | `idaapi.get_tinfo(tif, ea)`                                    |
-| `idc.SN_FORCE`                       | `ida_name.SN_FORCE`                                            |
-| `idc.apply_type(tif)`                | `ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)` |
-| `ida_typeinf.for_each_named_type(...)` | removed — iterate `ida_typeinf.get_named_type` results        |
-| `ida_typeinf.get_ordinal_qty(...)`   | removed                                                        |
-| `func.startEA` / `func.endEA`        | `func.start_ea` / `func.end_ea`                                |
-| `insn.Operands[0]`                   | `insn.ops[0]`                                                  |
-| `idc.GetCommentEx(ea, repeatable)`   | `idaapi.get_comment_ex(ea, repeatable)`                        |
-| `idc.SetType(ea, decl)`              | `ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)` |
-| `idaapi.set_name(ea, name, 0)`       | `ida_name.set_name(ea, name, ida_name.SN_FORCE)`               |
+| Need | IDA 9.4 API |
+| ---- | ----------- |
+| Function start only | `ida_funcs.get_func_start(ea)` |
+| Full function range/info | `info = ida_funcs.func_entry_info_t(); ida_funcs.get_func_entry_info(info, ea)` |
+| Function code items | `it = ida_funcs.function_item_iterator_t(ea)` with `first()` / `next_code()` |
+| Segment info | `info = ida_segment.segment_info_t(); ida_segment.get_segment_info(info, ea)` |
+| Segment name | `ida_segment.get_segment_name(ea)` |
+| Decompile by address | `ida_hexrays.decompile_function(ea, failure, flags)` |
+| Read an applied type | `ida_nalt.get_tinfo(tif, ea)` |
+| Apply a definite type | `ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)` |
+| Read a comment | `ida_bytes.get_cmt(ea, repeatable)` |
+| Set a name | `ida_name.set_name(ea, name, ida_name.SN_FORCE)` |
+| Parse a declaration | `ida_typeinf.parse_decl(out_tif, til, declaration, flags)` |
 
-When in doubt, prefer the `idaapi` / `ida_*` modules over the legacy `idc.*`
-shims — the `idc` namespace still exists for compatibility but most APIs have
-moved. If a `py_eval` snippet raises `AttributeError`, check this list first.
+`parse_decl` takes the output `tinfo_t` first. Local types can be enumerated by
+ordinal from `1` to `ida_typeinf.get_ordinal_limit() - 1`, loading each with
+`tif.get_numbered_type(None, ordinal)`.
 
 ## Core Functions
 
@@ -283,7 +284,7 @@ moved. If a `py_eval` snippet raises `AttributeError`, check this list first.
 - `list_globals(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
 - `decompile(addr)`: Decompile function at the given address.
-- `disasm(addr)`: Disassemble function with full details (arguments, stack frame, etc).
+- `disasm(addr)`: Disassemble a function. `asm.lines` is one compact newline-delimited string to save response tokens; metadata such as callees, strings, arguments, and stack frame is returned beside it.
 - `xrefs_to(addrs)`: Get all cross-references to address(es).
 - `xrefs_to_field(queries)`: Get cross-references to specific struct field(s).
 - `callees(addrs)`: Get functions called by function(s) at address(es).
@@ -383,15 +384,30 @@ http://127.0.0.1:13337/mcp?ext=dbg
 
 ## Batch Operations
 
+- `batch(calls, stop_on_error)`: Run up to 32 different active tools in one ordered MCP request. Normal write tools are allowed; nested `batch`, hidden extension tools, and `MCP_UNSAFE` tools are rejected.
 - `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
 - `patch(patches)`: Patch multiple byte sequences at once.
 - `put_int(items)`: Write integer values using ty (i8/u64/i16le/i16be/etc).
 
+Use a tool's native list input when all items use that tool. Use `batch` when two
+or more different calls do not need an earlier result. Keep calls that need an
+earlier result separate so the result can be checked before the next call.
+
+```json
+{
+  "calls": [
+    {"id": "functions", "tool": "lookup_funcs", "arguments": {"queries": ["main", "sub_401000"]}},
+    {"id": "types", "tool": "type_query", "arguments": {"queries": {"filter": "*Config*"}}}
+  ],
+  "stop_on_error": false
+}
+```
+
 **Key Features:**
 
 - **Type-safe API**: All functions use strongly-typed parameters with TypedDict schemas for better IDE support and LLM structured outputs
-- **Batch-first design**: Most operations accept both single items and lists
-- **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
+- **Batch-first design**: Use native list input for one tool, or `batch` for different calls that do not depend on each other's results
+- **Per-item error handling**: Native batch tools report item errors in their results; `batch` also reports validation and dispatch errors per call
 - **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
 

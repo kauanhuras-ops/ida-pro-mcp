@@ -29,6 +29,7 @@ import idautils
 import idc
 
 from .sync import IDAError
+from . import compat
 
 # ============================================================================
 # Version Detection
@@ -392,12 +393,26 @@ class StructRead(TypedDict, total=False):
 class TypeEdit(TypedDict):
     """Type application operation"""
 
-    addr: Annotated[str, "Address (function, global, or stack frame)"]
-    ty: NotRequired[Annotated[str, "Type name or declaration"]]
-    name: NotRequired[Annotated[str, "Variable/function name"]]
-    kind: NotRequired[Annotated[str, "Entity kind (auto-detected)"]]
-    signature: NotRequired[Annotated[str, "Function signature"]]
-    variable: NotRequired[Annotated[str, "Local variable name"]]
+    kind: Annotated[
+        Literal["function", "global", "local", "stack"],
+        "Target kind",
+    ]
+    ty: Annotated[str, "C type declaration, or a full signature for a function"]
+    addr: NotRequired[
+        Annotated[
+            str,
+            "Function address for function/local/stack; optional global address locator",
+        ]
+    ]
+    name: NotRequired[
+        Annotated[str, "Existing global or stack-variable name used as the locator"]
+    ]
+    signature: NotRequired[
+        Annotated[str, "Function-signature alias; takes precedence over ty"]
+    ]
+    variable: NotRequired[
+        Annotated[str, "Existing decompiler local-variable name used as the locator"]
+    ]
 
 
 class EnumMemberUpsert(TypedDict, total=False):
@@ -514,15 +529,6 @@ class Ref(TypedDict):
     addr: str
     name: str
     string: NotRequired[str]
-
-
-class DisassemblyLine(TypedDict):
-    segment: NotRequired[str]
-    addr: str
-    label: NotRequired[str]
-    instruction: str
-    comments: NotRequired[list[str]]
-    refs: NotRequired[list[Ref]]
 
 
 class Argument(TypedDict):
@@ -795,9 +801,7 @@ def get_function(addr: int, *, raise_error: Literal[False]) -> Optional[Function
 
 
 def get_function(addr, *, raise_error=True):
-    from . import compat
-
-    fn = idaapi.get_func(addr)
+    fn = compat.get_func(addr)
     if fn is None:
         if raise_error:
             raise IDAError(f"No function found at address {hex(addr)}")
@@ -808,9 +812,7 @@ def get_function(addr, *, raise_error=True):
     return Function(addr=hex(fn.start_ea), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 
-def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
-    from . import compat
-
+def get_prototype(fn: ida_funcs.func_entry_info_t) -> Optional[str]:
     prototype = compat.get_func_prototype(fn)
     if prototype is not None:
         return str(prototype)
@@ -828,7 +830,7 @@ DEMANGLED_TO_EA = {}
 
 
 def create_demangled_to_ea_map():
-    for ea in idautils.Functions():
+    for ea in compat.functions():
         demangled = idaapi.demangle_name(idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
         if demangled:
             DEMANGLED_TO_EA[demangled] = ea
@@ -944,7 +946,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
     if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
         return tif
 
-    # Try parse_decl for arbitrary type expressions (works in IDA 9.0+)
+    # Use IDA 9.4 parse_decl for arbitrary type expressions.
     tif = ida_typeinf.tinfo_t()
     flags = ida_typeinf.PT_SIL | ida_typeinf.PT_TYP
     candidate = type_name if type_name.endswith(";") else type_name + ";"
@@ -1028,7 +1030,7 @@ def refresh_decompiler_ctext(fn_addr: int):
     if not ida_hexrays.init_hexrays_plugin():
         return
     error = ida_hexrays.hexrays_failure_t()
-    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(
+    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_function(
         fn_addr, error, ida_hexrays.DECOMP_WARNINGS
     )
     if cfunc:
@@ -1106,19 +1108,14 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
 def get_stack_frame_variables_internal(
     fn_addr: int, raise_error: bool
 ) -> list[StackFrameVariable]:
-    from .sync import ida_major
-
-    if ida_major < 9:
-        return []
-
-    func = idaapi.get_func(fn_addr)
+    func = compat.get_func(fn_addr)
     if not func:
         if raise_error:
             raise IDAError(f"No function found at address {fn_addr}")
         return []
 
     tif = ida_typeinf.tinfo_t()
-    if not tif.get_type_by_tid(func.frame) or not tif.is_udt():
+    if not tif.get_function_frame(func.start_ea) or not tif.is_udt():
         return []
 
     members: list[StackFrameVariable] = []
@@ -1222,20 +1219,20 @@ def decompile_function_safe(
 
 def get_assembly_lines(ea: int) -> str:
     """Get assembly lines for a function in compact string format"""
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         return ""
 
     func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
 
     # Get segment from first instruction
-    first_seg = idaapi.getseg(func.start_ea)
-    segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
+    first_seg = compat.get_segment(func.start_ea)
+    segment_name = compat.get_segment_name(func.start_ea) if first_seg else "UNKNOWN"
 
     # Build compact string format
     lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
 
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.func_items(func.start_ea):
         mnem = idc.print_insn_mnem(item_ea) or ""
         ops = []
         for n in range(8):
@@ -1264,16 +1261,16 @@ def get_all_xrefs(ea: int) -> dict:
 
 def get_all_comments(ea: int) -> dict:
     """Get all comments for an address"""
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         return {}
 
     comments = {}
-    for item_ea in idautils.FuncItems(func.start_ea):
-        cmt = idaapi.get_cmt(item_ea, False)
+    for item_ea in compat.func_items(func.start_ea):
+        cmt = ida_bytes.get_cmt(item_ea, False)
         if cmt:
             comments[hex(item_ea)] = {"regular": cmt}
-        cmt = idaapi.get_cmt(item_ea, True)
+        cmt = ida_bytes.get_cmt(item_ea, True)
         if cmt:
             if hex(item_ea) not in comments:
                 comments[hex(item_ea)] = {}
@@ -1285,7 +1282,7 @@ def get_callees(addr: str) -> list[dict]:
     """Get callees for a single function address"""
     try:
         func_start = parse_address(addr)
-        func = idaapi.get_func(func_start)
+        func = compat.get_func(func_start)
         if not func:
             return []
         func_end = idc.find_func_end(func_start)
@@ -1300,7 +1297,7 @@ def get_callees(addr: str) -> list[dict]:
                 if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
                     func_type = (
                         "internal"
-                        if idaapi.get_func(target) is not None
+                        if compat.get_func(target) is not None
                         else "external"
                     )
                     func_name = idc.get_name(target)
@@ -1365,12 +1362,12 @@ def get_xrefs_from_internal(ea: int) -> list[Xref]:
 
 def extract_function_strings(ea: int) -> list[String]:
     """Extract string references from a function"""
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         return []
 
     strings = []
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.func_items(func.start_ea):
         for xref in idautils.XrefsFrom(item_ea, 0):
             if not xref.iscode:
                 # Check if target is a string
@@ -1394,12 +1391,12 @@ def extract_function_strings(ea: int) -> list[String]:
 
 def extract_function_constants(ea: int) -> list[dict]:
     """Extract immediate constants from a function"""
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         return []
 
     constants = []
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.func_items(func.start_ea):
         insn = idaapi.insn_t()
         if idaapi.decode_insn(insn, item_ea) > 0:
             for op in insn.ops:

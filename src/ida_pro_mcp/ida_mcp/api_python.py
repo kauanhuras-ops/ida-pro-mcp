@@ -151,7 +151,7 @@ class PythonExecResult(TypedDict):
 @idasync
 @unsafe
 def py_eval(
-    code: Annotated[str, "Python code"],
+    code: Annotated[str, "Python source to execute once in a fresh IDA scope"],
 ) -> PythonExecResult:
     """Execute Python in IDA context and return result/stdout/stderr.
 
@@ -159,9 +159,11 @@ def py_eval(
     and function definitions from previous calls are NOT available. Always
     include every ``import`` statement you need in the same call. Example:
 
-        from idaapi import get_func
-        import idautils
-        funcs = [f for f in idautils.Functions() if get_func(f)]
+        import ida_funcs
+        funcs = [
+            ida_funcs.get_func_ea_by_num(i)
+            for i in range(ida_funcs.get_func_qty())
+        ]
 
     A single trailing expression is evaluated and returned as ``result``
     (Jupyter-style); assign to ``result`` explicitly if you need a specific

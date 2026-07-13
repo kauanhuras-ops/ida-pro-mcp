@@ -2,6 +2,7 @@
 
 from ..framework import test
 from ..sync import IDAError
+from .. import compat
 from ..utils import (
     parse_address,
     normalize_list_input,
@@ -71,15 +72,13 @@ def test_utils_normalize_helpers():
 @test(binary="crackme03.elf")
 def test_utils_get_function_and_prototype():
     """get_function and get_prototype resolve structured function metadata."""
-    import idaapi
-
     fn = get_function(0x123E)
     assert fn["addr"] == "0x123e"
     assert fn["name"] == "main"
     assert fn["size"] == "0x104"
     assert get_function(0xDEADBEEF, raise_error=False) is None
 
-    proto = get_prototype(idaapi.get_func(0x123E))
+    proto = get_prototype(compat.get_func(0x123E))
     assert proto is not None
     assert "int __fastcall" in proto
 

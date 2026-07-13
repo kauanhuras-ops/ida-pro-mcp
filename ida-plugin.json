@@ -6,7 +6,7 @@
     "categories": ["api-scripting-and-automation", "debugging-and-tracing", "malware-analysis"],
     "logoPath": ".github/logo.png",
     "description": "AI-powered reverse engineering assistant that bridges IDA Pro with language models through MCP.",
-    "idaVersions": ">=8.3",
-    "version": "3.2.0"
+    "idaVersions": ">=9.4",
+    "version": "3.4.0"
   }
 }

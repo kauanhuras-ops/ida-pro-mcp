@@ -73,19 +73,19 @@ def idb_segments_resource() -> list[Segment]:
     """Get all memory segments with permissions"""
     segments = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if seg:
             perms = []
-            if seg.perm & idaapi.SEGPERM_READ:
+            if seg.get_perm() & idaapi.SEGPERM_READ:
                 perms.append("r")
-            if seg.perm & idaapi.SEGPERM_WRITE:
+            if seg.get_perm() & idaapi.SEGPERM_WRITE:
                 perms.append("w")
-            if seg.perm & idaapi.SEGPERM_EXEC:
+            if seg.get_perm() & idaapi.SEGPERM_EXEC:
                 perms.append("x")
 
             segments.append(
                 Segment(
-                    name=ida_segment.get_segm_name(seg),
+                    name=compat.get_segment_name(seg_ea),
                     start=hex(seg.start_ea),
                     end=hex(seg.end_ea),
                     size=hex(seg.size()),
@@ -121,7 +121,7 @@ def cursor_resource() -> dict:
     import ida_kernwin
 
     ea = ida_kernwin.get_screen_ea()
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
 
     result = {"addr": hex(ea)}
     if func:

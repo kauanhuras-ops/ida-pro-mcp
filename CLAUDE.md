@@ -41,6 +41,9 @@ def my_tool(...):
 ### API conventions
 - Prefer batch-first APIs.
 - Many functions accept either a comma-separated string or a list.
+- Use native list input for repeated calls to one tool. Use `batch` for different
+  active tools only when no call needs an earlier result. `batch` permits normal
+  write tools but rejects nested, hidden-extension, and `MCP_UNSAFE` calls.
 - Use full type hints and `Annotated[...]` descriptions.
 - The function docstring becomes the MCP tool description.
 
@@ -152,6 +155,6 @@ Lower priority:
 ## Practical notes
 
 - Server/plugin Python: 3.11+
-- IDA Pro 8.3+; 9.0 recommended
+- IDA Pro 9.4+; all IDA API examples and tests must use 9.4 entry points
 - IDA Free is not supported
 - If IDA uses the wrong Python, use `idapyswitch`

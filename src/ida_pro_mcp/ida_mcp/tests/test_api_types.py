@@ -13,6 +13,8 @@ from ..framework import (
     get_unmapped_address,
     get_named_address,
 )
+from .. import compat
+from ..api_core import lookup_funcs
 from ..api_types import (
     declare_type,
     enum_upsert,
@@ -146,8 +148,6 @@ def test_read_struct_name_resolution():
     if not fn_addr:
         skip_test("binary has no functions")
 
-    from ..api_core import lookup_funcs
-
     fn_info = lookup_funcs(fn_addr)
     assert_ok(fn_info[0], "fn")
     fn_name = fn_info[0]["fn"]["name"]
@@ -189,14 +189,14 @@ def _find_bss_addr() -> int | None:
     import idautils
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if seg is None:
             continue
-        if seg.type == idaapi.SEG_BSS:
+        if seg.get_type() == idaapi.SEG_BSS:
             return seg.start_ea
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if seg is None:
             continue
         if not ida_bytes.is_loaded(seg.start_ea):

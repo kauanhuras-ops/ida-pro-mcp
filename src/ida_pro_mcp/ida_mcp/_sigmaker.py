@@ -71,6 +71,7 @@ import string
 import typing
 
 import idaapi
+import ida_segment
 import idc
 
 __author__ = "mahmoudimus"
@@ -231,13 +232,14 @@ class InMemoryBuffer:
 
     def _load_segments(self):
         buf = self._buffer
-        seg = idaapi.get_first_seg()
-        while seg:
+        for index in range(ida_segment.get_segm_qty()):
+            seg = ida_segment.segment_info_t()
+            if not ida_segment.get_segment_info_by_num(seg, index):
+                continue
             size = seg.end_ea - seg.start_ea
             data = idaapi.get_bytes(seg.start_ea, size)
             if data:
                 buf.extend(data)
-            seg = idaapi.get_next_seg(seg.start_ea)
 
     def _load_input_file(self):
         if not self.file_path.exists():
@@ -844,7 +846,9 @@ class UniqueSignatureGenerator:
             raise Unexpected("Cannot create code signature for data")
 
         sig = Signature()
-        start_fn = idaapi.get_func(ea)
+        from . import compat
+
+        start_fn = compat.get_func(ea)
         bytes_since_last_check = 0
 
         # Seed-and-refine (issue #398): on the compiled SIMD path, scan the

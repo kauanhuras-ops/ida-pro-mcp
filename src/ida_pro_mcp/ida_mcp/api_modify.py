@@ -13,6 +13,7 @@ import ida_name
 import ida_ua
 
 from .compat import tinfo_get_udm
+from . import compat
 from .rpc import tool
 from .sync import idasync, IDAError
 from .utils import (
@@ -261,7 +262,7 @@ def append_comments(
                 results.append({"addr": addr_str, "error": f"Unsupported scope: {scope}"})
                 continue
 
-            fn = idaapi.get_func(ea)
+            fn = compat.get_func(ea)
             use_func_comment = scope == "func" or (
                 scope == "auto" and fn is not None and fn.start_ea == ea
             )
@@ -406,7 +407,13 @@ def rename(
         "Rename batch with func/data/local/stack fields (at least one required)",
     ],
 ) -> RenameResult:
-    """Batch-rename funcs/globals/locals/stack vars with dry-run options."""
+    """Rename functions, globals, local variables, or stack variables.
+
+    Input forms: ``func={addr, name}``, ``data={old, new}``, and
+    ``local`` or ``stack={func_addr, old, new}``. Each field also accepts a
+    list of those objects. Optional controls are ``dry_run``,
+    ``stop_on_error``, and ``allow_overwrite``.
+    """
 
     stop_on_error = bool(batch.get("stop_on_error", False))
     dry_run = bool(batch.get("dry_run", False))
@@ -495,7 +502,7 @@ def rename(
                     continue
 
                 ea = parse_address(addr_text)
-                func = idaapi.get_func(ea)
+                func = compat.get_func(ea)
                 if not func:
                     result = {
                         "addr": addr_text,
@@ -632,7 +639,7 @@ def rename(
                         break
                     continue
 
-                func = idaapi.get_func(parse_address(func_addr))
+                func = compat.get_func(parse_address(func_addr))
                 if not func:
                     result = {
                         "func_addr": func_addr,
@@ -717,7 +724,7 @@ def rename(
                         break
                     continue
 
-                func = idaapi.get_func(parse_address(func_addr))
+                func = compat.get_func(parse_address(func_addr))
                 if not func:
                     result = {
                         "func_addr": func_addr,
@@ -732,7 +739,7 @@ def rename(
                     continue
 
                 frame_tif = ida_typeinf.tinfo_t()
-                if not ida_frame.get_func_frame(frame_tif, func):
+                if not ida_frame.get_func_frame_ea(frame_tif, func.start_ea):
                     result = {
                         "func_addr": func_addr,
                         "old": old_name,
@@ -776,7 +783,7 @@ def rename(
                 udm = ida_typeinf.udm_t()
                 frame_tif.get_udm_by_tid(udm, tid)
                 offset = udm.offset // 8
-                if ida_frame.is_funcarg_off(func, offset):
+                if ida_frame.is_funcarg_off_ea(func.start_ea, offset):
                     result = {
                         "func_addr": func_addr,
                         "old": old_name,
@@ -797,8 +804,10 @@ def rename(
                         success = False
                         error = f"Stack variable name {new_name!r} already exists"
                     else:
-                        sval = ida_frame.soff_to_fpoff(func, offset)
-                        success = ida_frame.define_stkvar(func, new_name, sval, udm.type)
+                        sval = ida_frame.soff_to_fpoff_ea(func.start_ea, offset)
+                        success = ida_frame.define_stkvar_ea(
+                            func.start_ea, new_name, sval, udm.type
+                        )
                         if not success:
                             error = (
                                 f"Rename failed: could not rename stack variable "
@@ -919,7 +928,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
             end_ea = parse_address(end_str) if end_str else idaapi.BADADDR
 
             # Check if already a function
-            existing = idaapi.get_func(start_ea)
+            existing = compat.get_func(start_ea)
             if existing and existing.start_ea == start_ea:
                 results.append(
                     {
@@ -932,7 +941,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
 
             success = ida_funcs.add_func(start_ea, end_ea)
             if success:
-                func = idaapi.get_func(start_ea)
+                func = compat.get_func(start_ea)
                 results.append(
                     {
                         "addr": addr_str,
@@ -1076,7 +1085,7 @@ def force_recompile(
         invalidate_all = True
 
     if invalidate_all:
-        targets = list(idautils.Functions())
+        targets = list(compat.functions())
     else:
         for item in items or []:
             addr_str = item.get("addr") if isinstance(item, dict) else None
@@ -1084,7 +1093,7 @@ def force_recompile(
                 continue
             try:
                 ea = parse_address(addr_str)
-                func = ida_funcs.get_func(ea)
+                func = compat.get_func(ea)
                 if func is not None:
                     targets.append(func.start_ea)
             except Exception:

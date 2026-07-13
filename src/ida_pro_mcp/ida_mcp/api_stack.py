@@ -7,9 +7,9 @@ including reading, creating, and deleting stack variables in functions.
 from typing import Annotated, NotRequired, TypedDict
 import ida_typeinf
 import ida_frame
-import idaapi
 
 from .compat import tinfo_get_udm
+from . import compat
 from .rpc import tool
 from .sync import idasync
 from .utils import (
@@ -76,7 +76,7 @@ def declare_stack(
         type_name = item.get("ty", "")
 
         try:
-            func = idaapi.get_func(parse_address(fn_addr))
+            func = compat.get_func(parse_address(fn_addr))
             if not func:
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "No function found"}
@@ -86,14 +86,14 @@ def declare_stack(
             ea = parse_address(offset)
 
             frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
+            if not ida_frame.get_func_frame_ea(frame_tif, func.start_ea):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
                 )
                 continue
 
             tif = get_type_by_name(type_name)
-            if not ida_frame.define_stkvar(func, var_name, ea, tif):
+            if not ida_frame.define_stkvar_ea(func.start_ea, var_name, ea, tif):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "Failed to define"}
                 )
@@ -120,7 +120,7 @@ def delete_stack(
         var_name = item.get("name", "")
 
         try:
-            func = idaapi.get_func(parse_address(fn_addr))
+            func = compat.get_func(parse_address(fn_addr))
             if not func:
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "No function found"}
@@ -128,7 +128,7 @@ def delete_stack(
                 continue
 
             frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
+            if not ida_frame.get_func_frame_ea(frame_tif, func.start_ea):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
                 )
@@ -160,7 +160,7 @@ def delete_stack(
             frame_tif.get_udm_by_tid(udm, tid)
             offset = udm.offset // 8
             size = udm.size // 8
-            if ida_frame.is_funcarg_off(func, offset):
+            if ida_frame.is_funcarg_off_ea(func.start_ea, offset):
                 results.append(
                     {
                         "addr": fn_addr,
@@ -170,7 +170,9 @@ def delete_stack(
                 )
                 continue
 
-            if not ida_frame.delete_frame_members(func, offset, offset + size):
+            if not ida_frame.delete_frame_members_ea(
+                func.start_ea, offset, offset + size
+            ):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "Failed to delete"}
                 )

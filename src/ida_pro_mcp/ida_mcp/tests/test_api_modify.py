@@ -9,6 +9,7 @@ from ..framework import (
     get_any_function,
     get_named_address,
 )
+from .. import compat
 from ..api_modify import (
     append_comments,
     set_comments,
@@ -380,7 +381,7 @@ def test_define_undefine_func_roundtrip():
     """undefine removes an existing function and define_func recreates it with the same bounds."""
     import idaapi
 
-    func = idaapi.get_func(int(CRACKME_FRAME_DUMMY, 16))
+    func = compat.get_func(int(CRACKME_FRAME_DUMMY, 16))
     if not func:
         skip_test("frame_dummy function not present")
 
@@ -390,19 +391,19 @@ def test_define_undefine_func_roundtrip():
     try:
         undef_result = undefine({"addr": hex(start_ea), "end": hex(end_ea)})[0]
         assert "error" not in undef_result
-        assert idaapi.get_func(start_ea) is None
+        assert compat.get_func(start_ea) is None
 
         define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
         if "error" in define_result:
             define_code({"addr": hex(start_ea)})
             define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
         assert "error" not in define_result
-        recreated = idaapi.get_func(start_ea)
+        recreated = compat.get_func(start_ea)
         assert recreated is not None
         assert recreated.start_ea == start_ea
         assert recreated.end_ea == end_ea
     finally:
-        if idaapi.get_func(start_ea) is None:
+        if compat.get_func(start_ea) is None:
             define_code({"addr": hex(start_ea)})
             define_func({"addr": hex(start_ea), "end": hex(end_ea)})
 
@@ -467,7 +468,7 @@ def test_undefine_single_byte_and_restore():
     import idaapi
 
     addr = 0x1013EF0
-    func = idaapi.get_func(addr)
+    func = compat.get_func(addr)
     if not func:
         skip_test("typed_fixture main function not present")
     end_ea = func.end_ea
@@ -477,7 +478,7 @@ def test_undefine_single_byte_and_restore():
         assert "error" not in result
     finally:
         define_code({"addr": hex(addr)})
-        if idaapi.get_func(addr) is None:
+        if compat.get_func(addr) is None:
             define_func({"addr": hex(addr), "end": hex(end_ea)})
 
 
@@ -486,7 +487,7 @@ def test_undefine_batch():
     """undefine accepts batch input and can restore a small function afterwards."""
     import idaapi
 
-    func = idaapi.get_func(int(CRACKME_FRAME_DUMMY, 16))
+    func = compat.get_func(int(CRACKME_FRAME_DUMMY, 16))
     if not func:
         skip_test("frame_dummy function not present")
 
@@ -497,7 +498,7 @@ def test_undefine_batch():
         assert_is_list(result, min_length=1)
         assert "error" not in result[0]
     finally:
-        if idaapi.get_func(start_ea) is None:
+        if compat.get_func(start_ea) is None:
             define_code({"addr": hex(start_ea)})
             define_func({"addr": hex(start_ea), "end": hex(end_ea)})
 
@@ -706,12 +707,12 @@ def test_set_op_type_stroff_with_valid_struct():
         skip_test("binary has no functions")
 
     # Find the first instruction with a memory-displacement operand.
-    func = ida_funcs.get_func(int(fn_addr, 16))
+    func = compat.get_func(int(fn_addr, 16))
     if not func:
         skip_test("no func at addr")
     target_ea = None
     import ida_ua
-    for head in idautils.FuncItems(func.start_ea):
+    for head in compat.func_items(func.start_ea):
         insn = ida_ua.insn_t()
         if not ida_ua.decode_insn(insn, head):
             continue

@@ -160,18 +160,18 @@ def _build_segments() -> list[dict]:
 
     segments = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if not seg:
             continue
         perms = []
-        if seg.perm & idaapi.SEGPERM_READ:
+        if seg.get_perm() & idaapi.SEGPERM_READ:
             perms.append("r")
-        if seg.perm & idaapi.SEGPERM_WRITE:
+        if seg.get_perm() & idaapi.SEGPERM_WRITE:
             perms.append("w")
-        if seg.perm & idaapi.SEGPERM_EXEC:
+        if seg.get_perm() & idaapi.SEGPERM_EXEC:
             perms.append("x")
         segments.append({
-            "name": ida_segment.get_segm_name(seg),
+            "name": compat.get_segment_name(seg_ea),
             "start": hex(seg.start_ea),
             "end": hex(seg.end_ea),
             "size": hex(seg.size()),
@@ -202,8 +202,8 @@ def _build_statistics(func_eas: list[int], string_count: int, segment_count: int
 
     for ea in func_eas:
         name = idc.get_name(ea, 0) or ""
-        func = idaapi.get_func(ea)
-        flags = func.flags if func else 0
+        func = compat.get_func(ea)
+        flags = func.get_flags() if func else 0
 
         if name.startswith("sub_"):
             unnamed += 1
@@ -257,7 +257,7 @@ def _classify_func(ea: int, func, name: str, callee_count: int) -> str:
     """Classify function as thunk/wrapper/leaf/dispatcher/complex."""
     import idaapi
 
-    flags = func.flags
+    flags = func.get_flags()
     size = func.end_ea - func.start_ea
     if flags & idaapi.FUNC_THUNK or size <= 8:
         return "thunk"
@@ -278,11 +278,11 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
     candidates: list[tuple[int, int, str, int, int]] = []
 
     for ea in func_eas:
-        func = idaapi.get_func(ea)
+        func = compat.get_func(ea)
         if not func:
             continue
         name = idc.get_name(ea, 0) or ""
-        flags = func.flags
+        flags = func.get_flags()
 
         if _is_library_func(ea, name, flags):
             continue
@@ -297,9 +297,9 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
 
     result = []
     for xref_count, ea, name, size, _flags in top:
-        func = idaapi.get_func(ea)
+        func = compat.get_func(ea)
         callee_count = 0
-        for item_ea in idautils.FuncItems(ea):
+        for item_ea in compat.func_items(ea):
             for xref in idautils.XrefsFrom(item_ea, 0):
                 if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
                     callee_count += 1
@@ -371,7 +371,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
                 break
 
         # Check outgoing code refs (callees)
-        for item_ea in idautils.FuncItems(ea):
+        for item_ea in compat.func_items(ea):
             for xref in idautils.XrefsFrom(item_ea, 0):
                 if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
                     total_edges += 1
@@ -410,7 +410,7 @@ def survey_binary(
     minimal = detail_level == "minimal"
 
     # Collect all function addresses once, cap at _MAX_FUNC_ITER for large binaries.
-    all_func_eas = list(idautils.Functions())
+    all_func_eas = list(compat.functions())
     truncated = len(all_func_eas) > _MAX_FUNC_ITER
     if truncated:
         func_eas = all_func_eas[:_MAX_FUNC_ITER]

@@ -65,7 +65,7 @@ def test_typed_fixture_decompile_and_disasm():
 
     asm = disasm(USE_WRAPPER, max_instructions=40)
     assert_ok(asm, "asm")
-    lines_text = " ".join(item["instruction"] for item in asm["asm"]["lines"])
+    lines_text = asm["asm"]["lines"]
     assert "sum_point" in lines_text
     assert "4D2h" in lines_text
 

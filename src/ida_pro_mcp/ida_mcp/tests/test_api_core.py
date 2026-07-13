@@ -16,8 +16,11 @@ from ..framework import (
     get_any_function,
     get_data_address,
 )
+from .. import compat
+from ..rpc import MCP_EXTENSIONS, MCP_SERVER
 from ..utils import Function, ConvertedNumber
 from ..api_core import (
+    batch,
     lookup_funcs,
     int_convert,
     list_funcs,
@@ -37,6 +40,168 @@ CRACKME_MAIN = "0x123e"
 CRACKME_CHECK_PW = "0x11a9"
 CRACKME_FORMAT = "0x201f"
 CRACKME_PRINTF = "0x4040"
+
+
+@test()
+def test_batch_runs_active_tools_in_order():
+    """batch runs different active tools in order and keeps caller IDs."""
+    result = batch(
+        [
+            {
+                "id": "convert",
+                "tool": "int_convert",
+                "arguments": {"inputs": {"text": "16", "size": 32}},
+            },
+            {"id": "health", "tool": "server_health", "arguments": {}},
+        ]
+    )
+
+    assert result["completed"] == 2
+    assert result["failed"] == 0
+    assert not result["stopped"]
+    assert [item["id"] for item in result["results"]] == ["convert", "health"]
+    assert all(item["ok"] for item in result["results"])
+    assert result["results"][0]["result"][0]["result"]["decimal"] == "16"
+    assert result["results"][1]["result"]["status"] == "ok"
+
+
+@test()
+def test_batch_runs_through_mcp_tools_call():
+    """The MCP tools/call path can run batch and its inner tool call."""
+    response = MCP_SERVER._mcp_tools_call(
+        "batch",
+        {
+            "calls": [
+                {
+                    "id": "convert",
+                    "tool": "int_convert",
+                    "arguments": {"inputs": {"text": "255", "size": 8}},
+                }
+            ]
+        },
+    )
+
+    assert response["isError"] is False
+    result = response["structuredContent"]
+    assert result["failed"] == 0
+    assert result["results"][0]["id"] == "convert"
+    assert result["results"][0]["result"][0]["result"]["hexadecimal"] == "0xff"
+
+
+@test()
+def test_batch_allows_normal_write_tools_with_dry_run():
+    """batch permits a normal write tool without changing dry-run state."""
+    import ida_funcs
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+    ea = int(fn_addr, 16)
+    old_name = ida_funcs.get_func_name(ea)
+    new_name = f"{old_name or 'batch_func'}_dry_run"
+
+    result = batch(
+        [
+            {
+                "tool": "rename",
+                "arguments": {
+                    "batch": {
+                        "func": {"addr": fn_addr, "name": new_name},
+                        "dry_run": True,
+                    }
+                },
+            }
+        ]
+    )
+
+    assert result["failed"] == 0
+    assert result["results"][0]["ok"]
+    assert result["results"][0]["result"]["summary"]["dry_run"] is True
+    assert ida_funcs.get_func_name(ea) == old_name
+
+
+@test()
+def test_batch_blocks_nested_unsafe_and_inactive_tools():
+    """batch rejects calls that may bypass its safety and active-tool rules."""
+    result = batch(
+        [
+            {"id": "nested", "tool": "batch", "arguments": {"calls": []}},
+            {"id": "unsafe", "tool": "py_eval", "arguments": {"code": "1"}},
+            {"id": "inactive", "tool": "no_such_tool", "arguments": {}},
+        ]
+    )
+
+    assert result["completed"] == 3
+    assert result["failed"] == 3
+    assert [item["id"] for item in result["results"]] == [
+        "nested",
+        "unsafe",
+        "inactive",
+    ]
+    assert "nested" in result["results"][0]["error"]
+    assert "MCP_UNSAFE" in result["results"][1]["error"]
+    assert "not active" in result["results"][2]["error"]
+
+    too_many = batch(
+        [{"tool": "int_convert", "arguments": {"inputs": "1"}}] * 33
+    )
+    assert too_many["completed"] == 0
+    assert "maximum of 32" in too_many["error"]
+
+
+@test()
+def test_batch_blocks_hidden_extension_tool():
+    """batch applies the same extension gate as a direct MCP tool call."""
+    name = "_batch_hidden_probe"
+    group = "_batch_test"
+
+    def probe():
+        return {"ok": True}
+
+    old_method = MCP_SERVER.tools.methods.get(name)
+    old_group = set(MCP_EXTENSIONS.get(group, set()))
+    old_enabled = getattr(MCP_SERVER._enabled_extensions, "data", set())
+    MCP_SERVER.tools.methods[name] = probe
+    MCP_EXTENSIONS.setdefault(group, set()).add(name)
+    MCP_SERVER._enabled_extensions.data = set()
+    try:
+        result = batch([{"tool": name, "arguments": {}}])
+        assert result["failed"] == 1
+        assert "hidden extension" in result["results"][0]["error"]
+    finally:
+        if old_method is None:
+            MCP_SERVER.tools.methods.pop(name, None)
+        else:
+            MCP_SERVER.tools.methods[name] = old_method
+        if old_group:
+            MCP_EXTENSIONS[group] = old_group
+        else:
+            MCP_EXTENSIONS.pop(group, None)
+        MCP_SERVER._enabled_extensions.data = old_enabled
+
+
+@test()
+def test_batch_stop_on_error_controls_later_calls():
+    """stop_on_error stops only when requested and marks skipped work."""
+    calls = [
+        {"id": "bad", "tool": "no_such_tool", "arguments": {}},
+        {
+            "id": "good",
+            "tool": "int_convert",
+            "arguments": {"inputs": {"text": "2", "size": 8}},
+        },
+    ]
+
+    stopped = batch(calls, stop_on_error=True)
+    assert stopped["completed"] == 1
+    assert stopped["failed"] == 1
+    assert stopped["stopped"] is True
+
+    continued = batch(calls, stop_on_error=False)
+    assert continued["completed"] == 2
+    assert continued["failed"] == 1
+    assert continued["stopped"] is False
+    assert continued["results"][1]["ok"] is True
 
 
 @test()
@@ -142,7 +307,7 @@ def test_lookup_funcs_interior_address():
         skip_test("binary has no functions")
 
     ea = int(fn_addr, 16)
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         skip_test("IDA could not retrieve the function object")
 

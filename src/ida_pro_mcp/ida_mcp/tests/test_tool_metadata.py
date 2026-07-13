@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from ..framework import test
+from ..rpc import MCP_SERVER
 
 
 # Tool docstrings are model-facing MCP descriptions in this repository; see
@@ -308,3 +309,47 @@ def test_tool_param_typed_dicts_have_required_core():
             )
 
     assert not failures, "\n".join(failures)
+
+
+@test()
+def test_disasm_schema_keeps_compact_lines_string_contract():
+    """The public disasm schema must keep asm.lines as one compact string."""
+    func = MCP_SERVER.tools.methods["disasm"]
+    schema = MCP_SERVER._generate_tool_schema("disasm", func)["outputSchema"]
+    asm_schema = schema["properties"]["asm"]["anyOf"]
+    asm_object = next(item for item in asm_schema if item.get("type") == "object")
+    assert asm_object["properties"]["lines"]["type"] == "string"
+
+
+@test()
+def test_batch_schema_has_ordered_calls_and_stop_control():
+    """batch exposes a strict call shape and an ordered result list."""
+    func = MCP_SERVER.tools.methods["batch"]
+    schema = MCP_SERVER._generate_tool_schema("batch", func)
+    input_schema = schema["inputSchema"]
+    output_schema = schema["outputSchema"]
+
+    assert set(input_schema["required"]) == {"calls"}
+    assert input_schema["properties"]["calls"]["type"] == "array"
+    call_schema = input_schema["properties"]["calls"]["items"]
+    assert set(call_schema["required"]) == {"tool"}
+    assert {"tool", "arguments", "id"} <= set(call_schema["properties"])
+    assert "stop_on_error" in input_schema["properties"]
+    assert output_schema["properties"]["results"]["type"] == "array"
+
+
+@test()
+def test_set_type_schema_requires_kind_and_type_but_not_address():
+    """Type edits expose clear core fields while allowing name-only globals."""
+    func = MCP_SERVER.tools.methods["set_type"]
+    schema = MCP_SERVER._generate_tool_schema("set_type", func)["inputSchema"]
+    alternatives = schema["properties"]["edits"]["anyOf"]
+    for alternative in alternatives:
+        edit_schema = (
+            alternative["items"]
+            if alternative.get("type") == "array"
+            else alternative
+        )
+        required = set(edit_schema["required"])
+        assert {"kind", "ty"} <= required
+        assert "addr" not in required

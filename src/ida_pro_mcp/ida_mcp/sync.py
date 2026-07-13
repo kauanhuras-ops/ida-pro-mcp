@@ -15,9 +15,6 @@ from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
 # IDA Synchronization & Error Handling
 # ============================================================================
 
-ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))
-
-
 class IDAError(McpToolError):
     def __init__(self, message: str):
         super().__init__(message)
@@ -304,12 +301,7 @@ def keep_batch(func):
 def is_window_active():
     """Returns whether IDA is currently active."""
     # Source: https://github.com/OALabs/hexcopy-ida/blob/8b0b2a3021d7dc9010c01821b65a80c47d491b61/hexcopy.py#L30
-    using_pyside6 = (ida_major > 9) or (ida_major == 9 and ida_minor >= 2)
-
-    if using_pyside6:
-        from PySide6 import QtWidgets
-    else:
-        from PyQt5 import QtWidgets
+    from PySide6 import QtWidgets
 
     app = QtWidgets.QApplication.instance()
     if app is None:

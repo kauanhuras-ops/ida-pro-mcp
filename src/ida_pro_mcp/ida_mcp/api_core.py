@@ -20,8 +20,9 @@ import ida_nalt
 import ida_typeinf
 import idc
 
-from .rpc import tool
+from .rpc import MCP_SERVER, MCP_UNSAFE, tool
 from .sync import idasync, get_tool_deadline
+from . import compat
 from .utils import (
     ConvertedNumber,
     EntityQuery,
@@ -151,9 +152,32 @@ class SearchTextResult(TypedDict, total=False):
     error: str
 
 
+class BatchCall(TypedDict):
+    tool: Annotated[str, "Active MCP tool name"]
+    arguments: NotRequired[Annotated[dict[str, Any], "Tool arguments"]]
+    id: NotRequired[Annotated[str, "Caller label copied to the result"]]
+
+
+class BatchItemResult(TypedDict, total=False):
+    id: str
+    tool: str
+    ok: bool
+    result: Any
+    error: str
+
+
+class BatchResult(TypedDict):
+    results: list[BatchItemResult]
+    completed: int
+    failed: int
+    stopped: bool
+    error: NotRequired[str]
+
+
 # Cached strings list: [(ea, text), ...]
 _strings_cache: list[tuple[int, str]] | None = None
 _server_started_at = time.time()
+_MAX_BATCH_CALLS = 32
 
 
 def _get_strings_cache() -> list[tuple[int, str]]:
@@ -181,6 +205,110 @@ def init_caches():
 # ============================================================================
 # Core API Functions
 # ============================================================================
+
+
+@tool
+def batch(
+    calls: Annotated[
+        list[BatchCall],
+        "Ordered calls to active tools (1-32 calls)",
+    ],
+    stop_on_error: Annotated[
+        bool, "Stop after the first validation or tool-dispatch error"
+    ] = False,
+) -> BatchResult:
+    """Run calls that do not need an earlier result in one MCP request.
+
+    Prefer a tool's native list input when all work uses that one tool. Use
+    ``batch`` for different tools to cut MCP round trips. Normal write tools,
+    including ``rename``, ``set_type``, and ``patch``, are allowed. Nested
+    ``batch``, inactive tools, hidden extension tools, and ``MCP_UNSAFE`` tools
+    such as Python or debugger tools are rejected. Results keep input order and
+    IDs. ``stop_on_error`` covers validation and dispatch errors; errors inside a
+    successful tool result stay in that result. Maximum: 32 calls.
+    """
+    if not isinstance(calls, list) or not calls:
+        return {
+            "results": [],
+            "completed": 0,
+            "failed": 0,
+            "stopped": False,
+            "error": "calls must contain 1 to 32 items",
+        }
+    if len(calls) > _MAX_BATCH_CALLS:
+        return {
+            "results": [],
+            "completed": 0,
+            "failed": 0,
+            "stopped": False,
+            "error": f"calls exceeds the maximum of {_MAX_BATCH_CALLS}",
+        }
+
+    results: list[BatchItemResult] = []
+    stopped = False
+
+    for index, call in enumerate(calls):
+        call_id = str(call.get("id", index)) if isinstance(call, dict) else str(index)
+        name = str(call.get("tool", "")).strip() if isinstance(call, dict) else ""
+
+        error: str | None = None
+        if not isinstance(call, dict):
+            error = "call must be an object"
+        elif not name:
+            error = "tool is required"
+        elif name == "batch":
+            error = "nested batch calls are not allowed"
+        elif name in MCP_UNSAFE:
+            error = f"Tool {name!r} is MCP_UNSAFE and cannot run through batch"
+        elif name not in MCP_SERVER.tools.methods:
+            error = f"Tool {name!r} is not active"
+        else:
+            group = MCP_SERVER._get_tool_extension(name)
+            enabled = getattr(MCP_SERVER._enabled_extensions, "data", set())
+            if group and group not in enabled:
+                error = f"Tool {name!r} requires hidden extension {group!r}"
+
+        arguments = call.get("arguments", {}) if isinstance(call, dict) else {}
+        if error is None and not isinstance(arguments, dict):
+            error = "arguments must be an object"
+
+        if error is None:
+            response = MCP_SERVER.tools.dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "method": name,
+                    "params": arguments,
+                    "id": index,
+                }
+            )
+            if response is None:
+                error = f"Tool {name!r} returned no response"
+            elif "error" in response:
+                error = str(response["error"].get("message", "Unknown tool error"))
+            else:
+                results.append(
+                    {
+                        "id": call_id,
+                        "tool": name,
+                        "ok": True,
+                        "result": response.get("result"),
+                    }
+                )
+
+        if error is not None:
+            results.append(
+                {"id": call_id, "tool": name, "ok": False, "error": error}
+            )
+            if stop_on_error:
+                stopped = index + 1 < len(calls)
+                break
+
+    return {
+        "results": results,
+        "completed": len(results),
+        "failed": sum(1 for item in results if not item["ok"]),
+        "stopped": stopped,
+    }
 
 
 def _parse_func_query(query: str) -> int:
@@ -241,11 +369,11 @@ def _collect_imports() -> list[Import]:
 
 
 def _segment_name_for_ea(ea: int) -> str | None:
-    seg = idaapi.getseg(ea)
+    seg = compat.get_segment(ea)
     if not seg:
         return None
     try:
-        return idaapi.get_segm_name(seg)
+        return compat.get_segment_name(ea)
     except Exception:
         return None
 
@@ -259,8 +387,8 @@ def _primary_text_key(kind: str) -> str:
 def _collect_entities(kind: str) -> list[dict]:
     if kind == "functions":
         rows: list[dict] = []
-        for ea in idautils.Functions():
-            fn = idaapi.get_func(ea)
+        for ea in compat.functions():
+            fn = compat.get_func(ea)
             if not fn:
                 continue
             size_int = fn.end_ea - fn.start_ea
@@ -280,7 +408,7 @@ def _collect_entities(kind: str) -> list[dict]:
     if kind == "globals":
         rows = []
         for ea, name in idautils.Names():
-            if idaapi.get_func(ea) or name is None:
+            if compat.get_func(ea) or name is None:
                 continue
             rows.append(
                 {
@@ -324,7 +452,7 @@ def _collect_entities(kind: str) -> list[dict]:
         rows = []
         imports_by_ea = {int(imp["addr"], 16): imp for imp in _collect_imports()}
         for ea, name in idautils.Names():
-            is_function = bool(idaapi.get_func(ea))
+            is_function = bool(compat.get_func(ea))
             is_import = ea in imports_by_ea
             rows.append(
                 {
@@ -457,7 +585,7 @@ def lookup_funcs(
     # Treat empty/"*" as "all functions" - but add limit
     if not queries or (len(queries) == 1 and queries[0] in ("*", "")):
         all_funcs = []
-        for addr in idautils.Functions():
+        for addr in compat.functions():
             all_funcs.append(get_function(addr))
             if len(all_funcs) >= 1000:
                 break
@@ -568,7 +696,7 @@ def list_funcs(
 ) -> list[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_functions = [get_function(addr) for addr in idautils.Functions()]
+    all_functions = [get_function(addr) for addr in compat.functions()]
 
     results = []
     for query in queries:
@@ -598,8 +726,8 @@ def func_query(
     queries = normalize_dict_list(queries)
 
     all_functions: list[dict] = []
-    for addr in idautils.Functions():
-        fn = idaapi.get_func(addr)
+    for addr in compat.functions():
+        fn = compat.get_func(addr)
         if not fn:
             continue
         size_int = fn.end_ea - fn.start_ea
@@ -680,7 +808,7 @@ def list_globals(
     queries = normalize_dict_list(queries)
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
-        if not idaapi.get_func(addr) and name is not None:
+        if not compat.get_func(addr) and name is not None:
             all_globals.append(Global(addr=hex(addr), name=name))
 
     results = []
@@ -992,10 +1120,10 @@ def _exec_segments() -> list[tuple[int, int]]:
     """Return [(start, end)] for executable segments in address order."""
     ranges: list[tuple[int, int]] = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if not seg:
             continue
-        if not (seg.perm & idaapi.SEGPERM_EXEC):
+        if not (seg.get_perm() & idaapi.SEGPERM_EXEC):
             continue
         ranges.append((seg.start_ea, seg.end_ea))
     return ranges
@@ -1004,7 +1132,7 @@ def _exec_segments() -> list[tuple[int, int]]:
 def _all_segments() -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment(seg_ea)
         if seg:
             ranges.append((seg.start_ea, seg.end_ea))
     return ranges
@@ -1124,14 +1252,14 @@ def search_text(
                 if not lines:
                     continue
                 entry: SearchTextHit = {"addr": hex(head_ea), "matches": lines}
-                func = idaapi.get_func(head_ea)
+                func = compat.get_func(head_ea)
                 if func is not None:
                     fname = ida_funcs.get_func_name(func.start_ea)
                     if fname:
                         entry["function"] = fname
-                seg = idaapi.getseg(head_ea)
+                seg = compat.get_segment(head_ea)
                 if seg is not None:
-                    sname = ida_segment.get_segm_name(seg)
+                    sname = compat.get_segment_name(head_ea)
                     if sname:
                         entry["segment"] = sname
                 hits.append(entry)

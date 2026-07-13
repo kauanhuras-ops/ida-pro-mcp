@@ -497,42 +497,17 @@ def _resolve_function_start(query: object) -> tuple[int | None, str | None]:
     if ea == idaapi.BADADDR:
         return None, f"Failed to resolve function: {q}"
 
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if not func:
         return None, f"Not a function: {q}"
     return func.start_ea, None
-
-
-def _collect_line_comments(ea: int) -> list[str]:
-    out: list[str] = []
-    i = 0
-    while True:
-        line = ida_lines.get_extra_cmt(ea, ida_lines.E_PREV + i)
-        if line is None:
-            break
-        out.append(ida_lines.tag_remove(line))
-        i += 1
-    cmt = ida_bytes.get_cmt(ea, False)
-    if cmt:
-        out.append(cmt)
-    rcmt = ida_bytes.get_cmt(ea, True)
-    if rcmt and rcmt != cmt:
-        out.append(rcmt)
-    i = 0
-    while True:
-        line = ida_lines.get_extra_cmt(ea, ida_lines.E_NEXT + i)
-        if line is None:
-            break
-        out.append(ida_lines.tag_remove(line))
-        i += 1
-    return out
 
 
 def _resolve_ref_name(ea: int) -> str:
     name = ida_name.get_ea_name(ea)
     if name:
         return name
-    func = idaapi.get_func(ea)
+    func = compat.get_func(ea)
     if func and func.start_ea == ea:
         return ida_funcs.get_func_name(ea) or ""
     return ""
@@ -585,26 +560,6 @@ def _collect_decompile_refs(cfunc) -> list[dict]:
     return refs
 
 
-def _collect_line_refs(ea: int) -> list[dict]:
-    seen: set[int] = set()
-    refs: list[dict] = []
-    for ref_ea in idautils.CodeRefsFrom(ea, False):
-        if ref_ea == idaapi.BADADDR or ref_ea in seen:
-            continue
-        seen.add(ref_ea)
-        info = _resolve_ref(ref_ea)
-        if info:
-            refs.append(info)
-    for ref_ea in idautils.DataRefsFrom(ea):
-        if ref_ea == idaapi.BADADDR or ref_ea in seen:
-            continue
-        seen.add(ref_ea)
-        info = _resolve_ref(ref_ea)
-        if info:
-            refs.append(info)
-    return refs
-
-
 def _limit_items(items: list, limit: int) -> tuple[list, bool]:
     if limit < 0:
         limit = 0
@@ -613,10 +568,12 @@ def _limit_items(items: list, limit: int) -> tuple[list, bool]:
     return items[:limit], True
 
 
-def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[str], bool]:
+def _disasm_lines_limited(
+    func: ida_funcs.func_entry_info_t, max_insns: int
+) -> tuple[list[str], bool]:
     lines: list[str] = []
     truncated = False
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.func_items(func.start_ea):
         if len(lines) >= max_insns:
             truncated = True
             break
@@ -627,11 +584,11 @@ def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[
 
 
 def _collect_basic_blocks_limited(
-    func: ida_funcs.func_t, max_blocks: int
+    func: ida_funcs.func_entry_info_t, max_blocks: int
 ) -> tuple[list[BasicBlock], bool]:
     blocks: list[BasicBlock] = []
     truncated = False
-    for block in idaapi.FlowChart(func):
+    for block in compat.FlowChart(func.start_ea):
         if len(blocks) >= max_blocks:
             truncated = True
             break
@@ -648,11 +605,11 @@ def _collect_basic_blocks_limited(
     return blocks, truncated
 
 
-def _collect_callees_for_function(func: ida_funcs.func_t) -> list[dict]:
+def _collect_callees_for_function(func: ida_funcs.func_entry_info_t) -> list[dict]:
     callees: dict[int, dict] = {}
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.func_items(func.start_ea):
         for target in idautils.CodeRefsFrom(item_ea, 0):
-            callee = idaapi.get_func(target)
+            callee = compat.get_func(target)
             if not callee:
                 continue
             callee_start = callee.start_ea
@@ -665,10 +622,10 @@ def _collect_callees_for_function(func: ida_funcs.func_t) -> list[dict]:
     return list(callees.values())
 
 
-def _collect_callers_for_function(func: ida_funcs.func_t) -> list[dict]:
+def _collect_callers_for_function(func: ida_funcs.func_entry_info_t) -> list[dict]:
     callers: dict[int, dict] = {}
     for caller_site in idautils.CodeRefsTo(func.start_ea, 0):
-        caller = idaapi.get_func(caller_site)
+        caller = compat.get_func(caller_site)
         if not caller:
             continue
         caller_start = caller.start_ea
@@ -693,7 +650,7 @@ def _profile_function(
     max_items: int,
     include_prototype: bool,
 ) -> FuncProfileItem:
-    func = idaapi.get_func(start_ea)
+    func = compat.get_func(start_ea)
     if not func:
         return {"addr": hex(start_ea), "error": "Function not found"}
 
@@ -701,8 +658,8 @@ def _profile_function(
     size_int = func.end_ea - func.start_ea
     has_type = ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), func.start_ea)
 
-    instruction_count = sum(1 for _ in idautils.FuncItems(func.start_ea))
-    basic_block_count = sum(1 for _ in idaapi.FlowChart(func))
+    instruction_count = sum(1 for _ in compat.func_items(func.start_ea))
+    basic_block_count = sum(1 for _ in compat.FlowChart(func.start_ea))
     callers = _collect_callers_for_function(func)
     callees = _collect_callees_for_function(func)
     strings = extract_function_strings(func.start_ea)
@@ -795,7 +752,13 @@ def disasm(
         bool, "Compute total instruction count (default: false)"
     ] = False,
 ) -> DisasmResult:
-    """Disassemble function with offset/max_instructions pagination and optional total count."""
+    """Disassemble a function into one compact IDA-style text listing.
+
+    ``asm.lines`` is one newline-delimited string, not one JSON object per
+    instruction. The compact form saves response tokens. Function metadata,
+    callees, referenced strings, arguments, and stack-frame data are returned
+    beside that text in ``asm``.
+    """
 
     # Enforce max limit
     if max_instructions <= 0 or max_instructions > 50000:
@@ -805,10 +768,10 @@ def disasm(
 
     try:
         start = parse_address(addr)
-        func = idaapi.get_func(start)
+        func = compat.get_func(start)
 
         # Get segment info
-        seg = idaapi.getseg(start)
+        seg = compat.get_segment(start)
         if not seg:
             return {
                 "addr": addr,
@@ -817,7 +780,7 @@ def disasm(
                 "cursor": {"done": True},
             }
 
-        segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
+        segment_name = compat.get_segment_name(start) if seg else "UNKNOWN"
 
         if func:
             # Function exists: disassemble function items starting from requested address
@@ -852,7 +815,7 @@ def disasm(
             return include_total
 
         if func:
-            for ea in idautils.FuncItems(func.start_ea):
+            for ea in compat.func_items(func.start_ea):
                 if ea == idaapi.BADADDR:
                     continue
                 if ea < start:
@@ -899,12 +862,12 @@ def disasm(
 
         if func:
             # Basic block count
-            fblocks = list(idaapi.FlowChart(func))
+            fblocks = list(compat.FlowChart(func.start_ea))
             basic_blocks = len(fblocks)
 
             # Callees: unique function names called by this function
             seen_callees: set[int] = set()
-            for item_ea in idautils.FuncItems(func.start_ea):
+            for item_ea in compat.func_items(func.start_ea):
                 for target in idautils.CodeRefsFrom(item_ea, 0):
                     if target != idaapi.BADADDR and target not in seen_callees:
                         seen_callees.add(target)
@@ -914,7 +877,7 @@ def disasm(
 
             # String references
             seen_strs: set[int] = set()
-            for item_ea in idautils.FuncItems(func.start_ea):
+            for item_ea in compat.func_items(func.start_ea):
                 for dref in idautils.DataRefsFrom(item_ea):
                     if dref != idaapi.BADADDR and dref not in seen_strs:
                         seen_strs.add(dref)
@@ -1005,7 +968,7 @@ def func_profile(
                     }
                 )
                 continue
-            fn = idaapi.get_func(start_ea)
+            fn = compat.get_func(start_ea)
             if fn:
                 candidates.append(
                     {
@@ -1017,8 +980,8 @@ def func_profile(
                     }
                 )
         else:
-            for start_ea in idautils.Functions():
-                fn = idaapi.get_func(start_ea)
+            for start_ea in compat.functions():
+                fn = compat.get_func(start_ea)
                 if not fn:
                     continue
                 candidates.append(
@@ -1109,7 +1072,7 @@ def analyze_batch(
             continue
 
         try:
-            fn = idaapi.get_func(start_ea)
+            fn = compat.get_func(start_ea)
             if not fn:
                 raise RuntimeError(f"Function not found: {q}")
 
@@ -1557,7 +1520,7 @@ def callees(
     for fn_addr in addrs:
         try:
             func_start = parse_address(fn_addr)
-            func = idaapi.get_func(func_start)
+            func = compat.get_func(func_start)
             if not func:
                 results.append(
                     {"addr": fn_addr, "callees": None, "error": "No function found"}
@@ -1589,7 +1552,7 @@ def callees(
                     if target is not None and target not in callees_dict:
                         func_type = (
                             "internal"
-                            if idaapi.get_func(target) is not None
+                            if compat.get_func(target) is not None
                             else "external"
                         )
                         func_name = ida_name.get_name(target)
@@ -1739,7 +1702,7 @@ def basic_blocks(
     for fn_addr in addrs:
         try:
             ea = parse_address(fn_addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func(ea)
             if not func:
                 results.append(
                     {
@@ -1751,7 +1714,7 @@ def basic_blocks(
                 )
                 continue
 
-            flowchart = idaapi.FlowChart(func)
+            flowchart = compat.FlowChart(func.start_ea)
             all_blocks = []
 
             for block in flowchart:
@@ -1906,8 +1869,8 @@ def find(
 
                 seen_insn = set()
                 for seg_ea in idautils.Segments():
-                    seg = idaapi.getseg(seg_ea)
-                    if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+                    seg = compat.get_segment(seg_ea)
+                    if not seg or not (seg.get_perm() & idaapi.SEGPERM_EXEC):
                         continue
                     for normalized, size, pattern_bytes in candidates:
                         ea = seg.start_ea
@@ -2048,14 +2011,14 @@ def _resolve_insn_scan_ranges(
 
     exec_segments = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
-        if seg and (seg.perm & idaapi.SEGPERM_EXEC):
+        seg = compat.get_segment(seg_ea)
+        if seg and (seg.get_perm() & idaapi.SEGPERM_EXEC):
             exec_segments.append(seg)
 
     if func_addr is not None:
         try:
             ea = parse_address(func_addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func(ea)
             if not func:
                 return [], f"Function not found at {func_addr}"
             return [(func.start_ea, func.end_ea)], None
@@ -2064,7 +2027,7 @@ def _resolve_insn_scan_ranges(
 
     if segment_name is not None:
         for seg in exec_segments:
-            if idaapi.get_segm_name(seg) == segment_name:
+            if compat.get_segment_name(seg.start_ea) == segment_name:
                 return [(seg.start_ea, seg.end_ea)], None
         return [], f"Executable segment not found: {segment_name}"
 
@@ -2081,8 +2044,8 @@ def _resolve_insn_scan_ranges(
             return [], "No executable segments found"
 
         if end_ea is None:
-            seg = idaapi.getseg(start_ea)
-            if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+            seg = compat.get_segment(start_ea)
+            if not seg or not (seg.get_perm() & idaapi.SEGPERM_EXEC):
                 return [], "start address not in executable segment"
             end_ea = seg.end_ea
 
@@ -2324,7 +2287,7 @@ def export_funcs(
     for addr in addrs:
         try:
             ea = parse_address(addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func(ea)
             if not func:
                 results.append({"addr": addr, "error": "Function not found"})
                 continue
@@ -2408,7 +2371,7 @@ def callgraph(
     for root in roots:
         try:
             ea = parse_address(root)
-            func = idaapi.get_func(ea)
+            func = compat.get_func(ea)
             if not func:
                 results.append(
                     {
@@ -2443,7 +2406,7 @@ def callgraph(
                     return
                 visited.add(addr)
 
-                f = idaapi.get_func(addr)
+                f = compat.get_func(addr)
                 if not f:
                     return
 
@@ -2456,7 +2419,7 @@ def callgraph(
 
                 # Get callees
                 edges_added = 0
-                for item_ea in idautils.FuncItems(f.start_ea):
+                for item_ea in compat.func_items(f.start_ea):
                     if truncated:
                         break
                     for xref in idautils.CodeRefsFrom(item_ea, 0):
@@ -2465,7 +2428,7 @@ def callgraph(
                         if edges_added >= max_edges_per_func:
                             per_func_capped = True
                             break
-                        callee_func = idaapi.get_func(xref)
+                        callee_func = compat.get_func(xref)
                         if callee_func:
                             if len(edges) >= max_edges:
                                 hit_limit("edges")

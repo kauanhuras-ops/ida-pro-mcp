@@ -167,10 +167,8 @@ def declare_type(
         struct Foo { int x; char y; };
         typedef int my_int;
 
-    Note: the underlying ``ida_typeinf.parse_decl`` is invoked with the
-    output ``tinfo_t`` first (``parse_decl(tif, None, decl, flags)``).
-    The MCP tool handles this for you — you just pass the declaration
-    string and the populated type is added to the local type library.
+    Pass only the declaration text. The tool parses each full declaration
+    and adds the result to the local type library.
     """
     decls = normalize_list_input(decls)
     results = []
@@ -859,13 +857,13 @@ def _parse_type_tinfo(type_text: str) -> ida_typeinf.tinfo_t:
         for candidate in candidates:
             tif = ida_typeinf.tinfo_t()
             try:
-                # parse_decl returns '' on success in IDA 9.0, check is not None
+                # IDA 9.4 returns the declared name (which may be empty), or None.
                 if parse_decl(tif, None, candidate, flags) is not None and not tif.empty():
                     return tif
             except Exception:
                 continue
 
-    # Legacy constructor fallback.
+    # IDA 9.4 also supports parsing through the tinfo_t constructor.
     try:
         tif = ida_typeinf.tinfo_t(text, None, ida_typeinf.PT_SIL)
         empty = getattr(tif, "empty", None)
@@ -894,7 +892,7 @@ def _parse_function_tinfo(signature_text: str) -> ida_typeinf.tinfo_t:
         for candidate in candidates:
             tif = ida_typeinf.tinfo_t()
             try:
-                # parse_decl returns '' on success in IDA 9.0, check is not None
+                # IDA 9.4 returns the declared name (which may be empty), or None.
                 if parse_decl(tif, None, candidate, flags) is not None and tif.is_func():
                     return tif
             except Exception:
@@ -922,10 +920,10 @@ def _infer_type_edit_kind(edit: dict) -> str:
     if "addr" in edit and "name" in edit and _resolve_type_text(edit):
         # Heuristic: addr + frame name usually indicates stack variable updates.
         try:
-            fn = idaapi.get_func(parse_address(edit["addr"]))
+            fn = compat.get_func(parse_address(edit["addr"]))
             if fn:
                 frame_tif = ida_typeinf.tinfo_t()
-                if ida_frame.get_func_frame(frame_tif, fn):
+                if ida_frame.get_func_frame_ea(frame_tif, fn.start_ea):
                     _, udm = tinfo_get_udm(frame_tif, str(edit["name"]))
                     if udm:
                         return "stack"
@@ -944,13 +942,15 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             addr_text = str(edit.get("addr", "")).strip()
             if not addr_text:
                 return {"edit": edit, "kind": kind, "error": "Function address is required"}
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "Function not found"}
 
             signature = str(edit.get("signature") or type_text).strip()
             tif = _parse_function_tinfo(signature)
-            ok = ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL)
+            ok = ida_typeinf.apply_tinfo(
+                func.start_ea, tif, ida_typeinf.TINFO_DEFINITE
+            )
             result = {"edit": edit, "kind": kind, "ok": ok}
             if not ok:
                 result["error"] = (
@@ -976,7 +976,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
                 ea = parse_address(addr_text)
 
             tif = _parse_type_tinfo(type_text)
-            ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
+            ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)
             result = {"edit": edit, "kind": kind, "ok": ok}
             if not ok:
                 result["error"] = (
@@ -992,7 +992,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             if not var_name:
                 return {"edit": edit, "kind": kind, "error": "Local variable name is required"}
 
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "Function not found"}
 
@@ -1021,12 +1021,12 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             if not stack_name:
                 return {"edit": edit, "kind": kind, "error": "Stack variable name is required"}
 
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "No function found"}
 
             frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
+            if not ida_frame.get_func_frame_ea(frame_tif, func.start_ea):
                 return {"edit": edit, "kind": kind, "error": "No frame available"}
 
             idx, udm = tinfo_get_udm(frame_tif, stack_name)
@@ -1043,7 +1043,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             offset = udm.offset // 8
 
             tif = _parse_type_tinfo(type_text)
-            ok = ida_frame.set_frame_member_type(func, offset, tif)
+            ok = ida_frame.set_frame_member_type_ea(func.start_ea, offset, tif)
             result = {"edit": edit, "kind": kind, "ok": ok}
             if not ok:
                 result["error"] = (
@@ -1060,7 +1060,13 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
 @tool
 @idasync
 def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
-    """Apply types (function/global/local/stack)"""
+    """Apply types to functions, globals, decompiler locals, or stack variables.
+
+    Every edit needs ``kind`` and ``ty``. Functions, locals, and stack variables
+    also need ``addr``; locals use ``variable``, while stack variables use
+    ``name``. Globals need either ``name`` or ``addr``. The runtime still accepts
+    older inferred-kind and ``signature``-only requests for compatibility.
+    """
     normalized_edits = normalize_dict_list(edits, _parse_addr_type_shorthand)
     return [_apply_type_edit(edit) for edit in normalized_edits]
 
@@ -1073,7 +1079,12 @@ def type_apply_batch(
         "Batch type edits with optional stop_on_error behavior",
     ],
 ) -> TypeApplyBatchResult:
-    """Apply multiple type edits and return aggregate status."""
+    """Apply multiple typed edits and return aggregate status.
+
+    Each item follows the same locator rules as ``set_type``. Set
+    ``stop_on_error`` to stop after the first failed edit; otherwise every edit
+    is attempted and the result reports applied and failed counts.
+    """
     normalized_edits = normalize_dict_list(
         batch.get("edits", []), _parse_addr_type_shorthand
     )

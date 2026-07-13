@@ -15,6 +15,7 @@ from ..framework import (
     get_string_address_containing,
 )
 from ..utils import Function, Metadata
+from ..zeromcp.jsonrpc import JsonRpcRegistry
 
 
 @test(binary="crackme03.elf")
@@ -31,6 +32,38 @@ def test_framework_assert_shape_with_optional_and_list_of():
             "items": list_of({"name": str}, min_length=2),
         },
     )
+
+
+@test()
+def test_jsonrpc_union_keeps_plain_string_when_string_is_valid():
+    """JSON-looking text stays text when a union explicitly permits strings."""
+    registry = JsonRpcRegistry()
+
+    def echo(value: str | list[str]):
+        return value
+
+    registry.method(echo)
+    response = registry.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"value": '["a"]'}}
+    )
+    assert response is not None
+    assert response.get("result") == '["a"]'
+
+
+@test()
+def test_jsonrpc_union_decodes_json_when_string_is_not_valid():
+    """The compatibility parser still decodes JSON text for object-only unions."""
+    registry = JsonRpcRegistry()
+
+    def echo(value: list[str] | dict[str, str]):
+        return value
+
+    registry.method(echo)
+    response = registry.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"value": '["a"]'}}
+    )
+    assert response is not None
+    assert response.get("result") == ["a"]
 
 
 @test(binary="crackme03.elf")
