@@ -138,6 +138,27 @@ Live stream discussing prompting and showing some real-world malware analysis:
 
 [![](https://img.youtube.com/vi/iFxNuk3kxhk/0.jpg)](https://www.youtube.com/watch?v=iFxNuk3kxhk)
 
+## Skills & the `/goal` workflow
+
+When used as a Claude Code plugin, this repo ships skills and a supervised
+command that encode the reverse-engineering methodology so you don't have to
+re-prompt it each time. Claude loads them automatically when a task matches;
+you can also invoke a skill by name.
+
+- **`ida-cold-start`** — establish a trustworthy base from a fresh IDB: survey,
+  find the *real* entry points (TLS callbacks and CRT init, not just `WinMain`),
+  propagate types top-down, and discover heap structures via allocation sites
+  (with the corrections that make the naive "`WinMain` → `malloc` → big chunks"
+  approach actually work).
+- **`ida-verify-dynamic`** — stop guessing struct sizes, field offsets, access
+  widths, and runtime values from decompilation; confirm them on a live process
+  with the debugger (`dbg_*` tools). Requires a live IDA session and `--unsafe`.
+- **`/goal <verifiable task>`** — run a task under supervision: the main agent
+  executes while an adversarial `ida-goal-supervisor` sub-agent independently
+  re-checks every claim against IDA MCP ground truth (preferring the debugger)
+  before the goal is allowed to pass. Phrase the goal as something falsifiable,
+  e.g. `/goal prove sizeof(GameState) and the offset of its entity array`.
+
 ## Tips for Enhancing LLM Accuracy
 
 Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `int_convert` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
