@@ -64,12 +64,13 @@ uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-a
 ## Analysis Skills (Swiss-army knife)
 
 The `skills/` directory ships a set of model-invoked analysis playbooks (see
-[`skills/README.md`](skills/README.md)): `ida-re-methodology` (master workflow),
-`ida-function-recon`, `ida-cluster-analysis`, `ida-struct-recovery`, `ida-decomp-verify`, and
-`ida-calling-convention`. They encode decomp.me-style discipline — disassembly is ground truth, iterate
-to a fixpoint, name and type everything, confirm conventions/return types from the bytes, and fix
-upstream mistakes on sight. Each `SKILL.md` has a `description` that lets the model auto-load it when
-relevant.
+[`skills/README.md`](skills/README.md)): `ida-re-methodology` (master workflow), `ida-cold-start`
+(blank IDB → first targets), `ida-function-recon`, `ida-cluster-analysis`, `ida-struct-recovery`,
+`ida-decomp-verify`, `ida-calling-convention`, and `ida-dynamic-verify` (confirm facts by running the
+target under the debugger). They encode decomp.me-style discipline — disassembly is ground truth,
+iterate to a fixpoint, name and type everything, confirm conventions/return types from the bytes, and
+fix upstream mistakes on sight. Each `SKILL.md` has a `description` that lets the model auto-load it
+when relevant.
 
 ### Claude Code
 
@@ -85,7 +86,7 @@ across all projects, auto-loaded by description:
 ```bash
 # macOS/Linux: symlink each skill dir into your personal skills folder
 mkdir -p ~/.claude/skills
-for d in ida-re-methodology ida-function-recon ida-cluster-analysis ida-struct-recovery ida-decomp-verify ida-calling-convention; do
+for d in ida-re-methodology ida-cold-start ida-function-recon ida-cluster-analysis ida-struct-recovery ida-decomp-verify ida-calling-convention ida-dynamic-verify; do
   ln -sfn "$(pwd)/skills/$d" ~/.claude/skills/"$d"
 done
 ```
@@ -93,7 +94,7 @@ done
 ```powershell
 # Windows (PowerShell): symlink (or use Copy-Item to copy instead)
 mkdir "$env:USERPROFILE\.claude\skills" -Force
-foreach ($d in "ida-re-methodology","ida-function-recon","ida-cluster-analysis","ida-struct-recovery","ida-decomp-verify","ida-calling-convention") {
+foreach ($d in "ida-re-methodology","ida-cold-start","ida-function-recon","ida-cluster-analysis","ida-struct-recovery","ida-decomp-verify","ida-calling-convention","ida-dynamic-verify") {
   New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\$d" -Target "$PWD\skills\$d" -Force
 }
 ```
@@ -114,11 +115,13 @@ on demand instead of loading all of them every turn. Add this to your analysis w
 Before reverse-engineering work over the IDA Pro MCP tools, read the relevant playbook under
 `<path-to>/ida-pro-mcp/skills/`:
 - `ida-re-methodology/SKILL.md` — start here: overall workflow and routing
+- `ida-cold-start/SKILL.md` — blank IDB: finish analysis, resolve library code, type imports, seed targets
 - `ida-function-recon/SKILL.md` — analyze/type a single function
 - `ida-cluster-analysis/SKILL.md` — analyze/cluster groups of functions
 - `ida-struct-recovery/SKILL.md` — reconstruct structs/classes/vtables
 - `ida-decomp-verify/SKILL.md` — find decompiler errors vs disassembly
 - `ida-calling-convention/SKILL.md` — confirm convention/args/return from the bytes
+- `ida-dynamic-verify/SKILL.md` — confirm real size/args/data by running it under the debugger (unsafe)
 Follow their discipline: disassembly is ground truth; name and type everything; fix upstream
 mistakes immediately.
 ```

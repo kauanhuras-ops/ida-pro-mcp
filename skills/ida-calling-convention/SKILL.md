@@ -69,6 +69,10 @@ Inspect what the exit path leaves in the return register:
 - **`__noreturn`**: function never returns (ends in `int3`, `ud2`, or a tail-call to abort/exit with no
   epilogue). Mark it — a wrong noreturn silently drops code in callers (→ `ida-decomp-verify`).
 
+When the register/stack evidence is genuinely ambiguous (tail-merged code, hand-written asm, unclear
+arg count), don't guess — **confirm at runtime with `ida-dynamic-verify`**: break at the entry/call
+site and read the actual argument registers to see which hold live values. Then set the prototype.
+
 ## Step 3 — Detect the convention and specials
 
 - **Callee stack cleanup** (`ret N` on x86) ⇒ `stdcall`/`thiscall`/`fastcall`; plain `ret` ⇒ `cdecl`.

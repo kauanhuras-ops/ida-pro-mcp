@@ -20,22 +20,26 @@ routes to the rest.
 | Skill | Scope | Use when |
 |---|---|---|
 | **ida-re-methodology** | Master workflow & router | Any session start; deciding how to approach a binary/subsystem/function |
+| **ida-cold-start** | Blank IDB → first targets | Fresh binary, nothing named yet, "where do I start" |
 | **ida-function-recon** | One function → fully worked up | "What does this function do", "clean up / type this function" |
 | **ida-cluster-analysis** | Groups of functions; clustering | "Map this subsystem", "group these functions", "what touches g_state" |
 | **ida-struct-recovery** | Structs, classes, vtables, unions | Pseudocode full of `*(a1 + 0x18)`; a threaded context/`this` pointer |
 | **ida-decomp-verify** | Find/fix decompiler errors vs disasm | Pseudocode looks wrong (phantom args, dropped code, `__int64` soup) |
 | **ida-calling-convention** | Confirm convention + args + return type | Before committing any prototype; arguments render wrong |
+| **ida-dynamic-verify** | Confirm facts by RUNNING it (debugger) | Real size/args/data/indirect targets you can't settle statically (unsafe, opt-in) |
 
 ### How they fit together
 
 ```
 ida-re-methodology                    (survey → pick target → route → iterate → verify)
+    ├── ida-cold-start                blank IDB: analysis → library code → imports → seed targets
     ├── ida-function-recon            single function loop
     │       ├── ida-calling-convention   confirm prototype from disasm
     │       ├── ida-struct-recovery      resolve *(base + N) into fields
     │       └── ida-decomp-verify        QA the pseudocode against the bytes
-    └── ida-cluster-analysis          groups: discover → analyze_component → shared types → leaves→roots
-            └── (reuses all of the above per member function)
+    ├── ida-cluster-analysis          groups: discover → analyze_component → shared types → leaves→roots
+    │       └── (reuses all of the above per member function)
+    └── ida-dynamic-verify            run it: confirm real size/args/data, then persist to the IDB
 ```
 
 ### The invariant every skill upholds

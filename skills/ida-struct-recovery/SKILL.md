@@ -111,6 +111,10 @@ the cluster. Correct the layout the moment new evidence lands, then keep going.
 - Every member function of the struct now renders fields by name (spot-check via `decompile`).
 - Total struct size matches allocation sites (`malloc(sizeof)` constant, or the stride of an array of
   these) — a mismatch means a missing/oversized field.
+- **When the size/layout can't be settled statically** (computed allocation, offsets only touched on
+  paths you can't trace), confirm at runtime with **ida-dynamic-verify**: break the allocator for the
+  real size, and watchpoint the object to see which offsets are actually written (max offset = true
+  size). Then persist the confirmed layout here.
 
 ## Traps
 
