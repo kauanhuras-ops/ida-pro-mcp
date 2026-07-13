@@ -7,31 +7,34 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-struct-recovery task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: member offset, width,
+            use, and type evidence; gaps and overlays; size bounds; owner set and applied
+            types; approved writes and read-back; conflicts and open layout questions.
+            Return {"ok": true} only if the message names the target and write scope and
+            marks every checklist item pass or n/a with concrete evidence, with no required
+            work left; or states a real blocker needing user input, approval, or external
+            state and asks a direct question. Return {"ok": false, "reason": "the next
+            concrete work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Struct recovery
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: recover the named type for the
-named owners in the requested read-only or IDB-write mode; finish when every claimed
-field offset, width, type, and size bound has evidence.
+Before any IDA or MCP tool call, state a short working goal with target, scope, evidence,
+and Done checks: recover the named type for the named owners in the requested read-only or
+IDB-write mode; finish when every claimed field offset, width, type, and size bound has
+evidence.
 
 Update the working goal when the owner set or type target changes. Keep working until the
 done checks pass. Do not declare or apply a type in read-only mode.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -51,7 +54,7 @@ Find the base pointer used at constant offsets. For each access, record:
 | offset | encoded displacement |
 | width | byte, word, dword, qword, vector, or other width |
 | action | read, write, address-take, compare, or call |
-| use | integer, pointer, array index, API argument, callback, and so on |
+| use | integer, pointer, array index, API argument, or callback |
 
 Use `disasm` for the final width and operand check. `insn_query` can find candidates:
 
@@ -134,8 +137,8 @@ force_recompile({"items":[{"addr":"<owner1>"},{"addr":"<owner2>"}]})
 Use `make_data` only when the task needs a data item to be created or replaced. For an
 existing global, prefer `set_type` when it is enough.
 
-When you also rename an owner variable or global, run the `rename` step before the type
-step; a type application does not reliably keep a name in IDA. Check that the name survived.
+When an owner variable or global needs a new name and a type, use the explicit name and type
+operations and read both results back.
 
 Read the owners again. A better decompile is a check on application, not proof of layout.
 If new evidence conflicts with a field, correct the shared type and recheck every

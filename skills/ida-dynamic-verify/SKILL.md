@@ -7,33 +7,35 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-dynamic-verify task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current target, execution approval, and IDB write
-            scope, lists concrete evidence that all applicable Done checks passed,
-            confirms the debuggee was stopped or was left live by user request, and says
-            no required work remains; or if it states a real blocker that needs user
-            input, approval, or external state and asks a direct question. Return {"ok":
-            false, "reason": "the next concrete work"} for a progress-only report,
-            TODOs, unchecked claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: execution approval
+            and run context; static hypothesis and live result; observation limits;
+            address rebase; approved IDB writes and read-back; debuggee state; final
+            verdict. Return {"ok": true} only if the message names the target, approval,
+            and write scope and marks every checklist item pass or n/a with concrete
+            evidence, with no required work left; or states a real blocker needing user
+            input, approval, or external state and asks a direct question. Return
+            {"ok": false, "reason": "the next concrete work"} for any missing, failed,
+            unrun, unsafe, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Dynamic verification
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: run the named target to test one
-exact claim, with a stated read-only or IDB-write scope; finish when the observation is
-compared with the hypothesis, address rebasing is checked, and the debuggee is stopped.
+Before any IDA or MCP tool call, state a short working goal with target, execution approval,
+IDB write scope, evidence, and Done checks: run the named target to test one exact claim;
+finish when the observation is compared with the hypothesis, address rebasing is checked,
+and the debuggee is stopped.
 
 Update the working goal for a new runtime question. Keep working until the done checks
 pass or an execution, environment, or tool blocker needs user action.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, execution approval, IDB write scope, checks run,
-results, debuggee state, and remaining work. If required work remains, the hook blocks
-stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 The working goal does not grant execution approval.
 
@@ -86,8 +88,8 @@ dbg_exit({})
 ```
 
 Set all needed breakpoints before `dbg_continue`. Use `dbg_run_to` for a checked one-shot
-location. Use `dbg_step_into` or `dbg_step_over` only as far as needed for the stated
-claim.
+location. Use `dbg_step_into` or `dbg_step_over` only until the stated evidence instruction
+has run or the stop condition is met.
 
 For a hot breakpoint, use a condition:
 
@@ -171,9 +173,9 @@ In approved IDB-write mode:
 - an indirect target may support `rename` and `set_type`;
 - produced data may support `set_comments`.
 
-For a target you both rename and type, run the `rename` step before the `set_type` step; a
-type application does not reliably keep a name in IDA. Recompile affected functions and read
-them back. In read-only IDB mode, make no IDB change.
+For a target that needs both facts, use `rename` for the name and `set_type` for the type,
+then read both back. Recompile affected functions. In read-only IDB mode, make no IDB
+change.
 
 ## Done
 

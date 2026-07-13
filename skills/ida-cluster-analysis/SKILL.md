@@ -7,31 +7,34 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-cluster-analysis task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: scope and graph
+            bounds; member and exclusion reasons; entry, exit, and indirect paths; shared
+            data; member checks; approved writes and group read-back; open edges. Return
+            {"ok": true} only if the message names the target and write scope and marks
+            every checklist item pass or n/a with concrete evidence, with no required work
+            left; or states a real blocker needing user input, approval, or external state
+            and asks a direct question. Return {"ok": false, "reason": "the next concrete
+            work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Cluster analysis
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: map the named group in the
-requested read-only or IDB-write mode; finish when members, boundaries, shared data,
-entry and exit paths, and open gaps are checked.
+Before any IDA or MCP tool call, state a short working goal with target, write scope,
+member rule, graph depth and node bounds, evidence, and Done checks: map the named group;
+finish when bounded members, boundaries, shared data, entry and exit paths, and open gaps
+are checked.
 
 Update the working goal when the member set or target changes. Keep working until the
 done checks pass. Do not rename a group or its members when the request is read-only.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -121,9 +124,8 @@ one such group).
 In IDB-write mode:
 
 1. Apply a shared type only after its offsets and widths have evidence.
-2. Batch names or prototypes that come from the same checked model. For any entity you both
-   rename and type, run the `rename` step before the type step; a type application does not
-   reliably keep a name in IDA. Check that names survived.
+2. Batch names or prototypes that come from the same checked model. Use `rename` for a new
+   name and a type tool for a type; read both results back.
 3. Call `force_recompile` for affected members.
 4. Run `analyze_component` again and check that calls and shared data still agree.
 
@@ -149,8 +151,8 @@ Do not call an edge “unrelated” only because its current name is different.
 
 Finish only when:
 
-- the member list has a stated reason for each included function;
-- key excluded neighbors and common utilities are stated;
+- the member list follows the goal's stated admission rule and bounds;
+- every checked boundary neighbor is included or excluded with a stated reason;
 - entry, exit, direct, callback, and known indirect paths are mapped;
 - shared types, globals, enums, and constants have evidence;
 - each in-scope member meets the needed part of **ida-function-recon**;

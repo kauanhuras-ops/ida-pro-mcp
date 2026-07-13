@@ -7,22 +7,25 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-re-methodology task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: exact target and
+            scope; every goal item; evidence for each claim; approved writes and read-back;
+            conflict check; uncertainty and final report. Return {"ok": true} only if the
+            message names the target and write scope and marks every checklist item pass or
+            n/a with concrete evidence, with no required work left; or states a real
+            blocker needing user input, approval, or external state and asks a direct
+            question. Return {"ok": false, "reason": "the next concrete work"} for any
+            missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # RE methodology
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set a working goal that names:
+Before any IDA or MCP tool call, state a working goal that names:
 
 - the exact binary, subsystem, function, or data type;
 - whether IDB changes are allowed;
@@ -34,9 +37,8 @@ possible findings. Keep working until the goal checks pass. Stop only when a mis
 target, tool, user choice, or write or execution approval blocks safe work; state the
 exact blocker and ask a direct question.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 If the user only asks for an explanation, review, or diagnosis, use read-only mode. Do not
 change the IDB without a request that allows it.
@@ -82,8 +84,8 @@ Use this loop on each in-scope item:
    observation that supports or rejects the claim.
 4. **Record it:** in read-only mode, keep it for the report. In IDB-write mode, apply the
    smallest supported `rename`, `set_type`, `declare_type`, or `set_comments` change.
-   Do not turn an uncertain idea into a certain name. When you both rename and type the same
-   entity, do the `rename` first and the type after, as separate steps (see below).
+   Do not turn an uncertain idea into a certain name. Use a name tool and a type tool when
+   both facts are needed.
 5. **Propagate:** after a type, prototype, or struct change, call `force_recompile` for
    affected functions and inspect the changed output.
 6. **Recheck:** if the change creates a mismatch, correct or remove the claim before
@@ -92,11 +94,11 @@ Use this loop on each in-scope item:
 Batch writes that come from the same evidence. Do not collect unrelated changes into one
 large batch. Use `rename` with `dry_run` for a large or collision-prone rename.
 
-**Rename before type.** In IDA, naming and typing are separate operations, and applying a
-type does not reliably keep a symbol name. So for the same function, local, global, or stack
-variable, always run the `rename` step before the `set_type` / `type_apply_batch` /
-`declare_stack` step, as separate calls, and check that the name survived. Do not depend on
-a type edit's `name` field to name the entity.
+**Name and type with the right operation.** `rename` creates a new name. `set_type` and
+`type_apply_batch` apply types. A type edit's `name` field is an existing global or
+stack-member locator, not a new name. If a local is renamed first, use the new name as the
+later type locator. Read the final name and type back. `declare_stack` and `make_data` are
+combined create operations and may set both in one call.
 
 ## Work order
 

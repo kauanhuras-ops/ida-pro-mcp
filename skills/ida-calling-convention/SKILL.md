@@ -6,32 +6,35 @@ hooks:
     - hooks:
         - type: prompt
           prompt: >-
-            Decide whether Claude may stop the active ida-calling-convention task.
-            Review $ARGUMENTS, especially last_assistant_message. Return {"ok": true}
-            only if the message names the current user target and write scope, lists
-            concrete evidence that all applicable Done checks passed, and says no
-            required work remains; or if it states a real blocker that needs user input,
-            approval, or external state and asks a direct question. Return {"ok": false,
-            "reason": "the next concrete work"} for a progress-only report, TODOs,
-            unchecked claims, failed or unrun checks, or unsupported completion.
+            Decide whether Claude may stop the active ida-calling-convention task. Review
+            $ARGUMENTS, especially last_assistant_message. Checklist: platform ABI;
+            incoming locations and call sites; parameter types; return paths; hidden or
+            special arguments; approved prototype read-back; open ABI doubt. Return
+            {"ok": true} only if the message names the target and write scope and marks
+            every checklist item pass or n/a with concrete evidence, with no required work
+            left; or states a real blocker needing user input, approval, or external state
+            and asks a direct question. Return {"ok": false, "reason": "the next concrete
+            work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Calling convention and return type
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: recover the ABI contract of the
-named function in the requested read-only or IDB-write mode; finish when used inputs,
-call-site arguments, return paths, hidden arguments, and convention evidence agree.
+Before any IDA or MCP tool call, state a short working goal with target, scope, evidence,
+and Done checks: recover the ABI contract of the named function in the requested read-only
+or IDB-write mode; finish when used inputs, call-site arguments, return paths, hidden
+arguments, and convention evidence agree.
 
 Update the working goal when the target changes. Keep working until the done checks pass.
 Do not apply a prototype in read-only mode.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -133,8 +136,8 @@ parameters still need call and use evidence.
 
 ## 6. Apply and verify
 
-In IDB-write mode, name the function first, then apply the prototype (naming and typing are
-separate operations in IDA; a type application does not reliably keep a name):
+In IDB-write mode, use `rename` if a new function name is needed and use `set_type` for the
+prototype. They are separate operations. The type-only step has this shape:
 
 ```text
 set_type({"edits":[{"addr":"<function>","signature":"int parse(struct Ctx *ctx, const char *text, int length)"}]})
@@ -144,6 +147,7 @@ force_recompile({"items":[{"addr":"<function>"}]})
 Read the callee and several callers again. Check that each rendered argument maps to the
 same setup instructions and that return use is unchanged. If a known caller conflicts,
 correct the prototype before moving on.
+If a rename was also made, read back both the final name and prototype.
 
 Do not apply an “almost right” certain prototype when an unknown parameter would change
 argument positions. State the uncertainty or keep the safer current type.
@@ -157,6 +161,7 @@ Finish only when:
 - parameter count limits and unused-parameter uncertainty are stated;
 - each claimed parameter type has width and use evidence;
 - all normal return paths and caller use support the return type;
-- hidden results, `this`, varargs, no-return behavior, and nonstandard registers were
-  checked where relevant;
+- hidden results were checked for aggregate returns; `this` for member-style access;
+  varargs for changing call-site counts; no-return behavior for paths without a return;
+  and nonstandard registers when the platform ABI did not explain a live input;
 - any approved prototype was recompiled and checked in the callee and callers.

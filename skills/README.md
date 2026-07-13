@@ -3,6 +3,9 @@
 This set has ten analysis skills for work on an IDA database through MCP. Start with
 `ida-re-methodology`. It sets the work scope and sends the task to a focused skill.
 
+The skills target **IDA Professional 9.4** and **ida-pro-mcp 3.3.0**. Rules or examples
+from older IDA versions are not a source of truth for this set.
+
 ## Stop-hook contract
 
 A skill cannot invoke a slash command. Each `SKILL.md` therefore defines its own
@@ -13,21 +16,25 @@ skill is active. When the agent tries to stop, the hook checks the last response
 - `{"ok": false, "reason": "..."}` blocks the stop and gives the reason back as the next
   work instruction.
 
-The hook allows a stop only after a completion audit, or for a real blocker that needs
-user input, approval, or external state. A progress note, TODO, failed check, unrun check,
-or unsupported “done” claim is blocked.
+Each hook contains a short checklist for its skill. The final audit must mark every item
+`pass`, `n/a`, or `blocked` and give evidence. The hook allows a stop only when every item
+is proved or not applicable, or for a real blocker that needs user input, approval, or
+external state. A progress note, TODO, failed check, unrun check, or unsupported “done”
+claim is blocked.
 
 The `/goal` command is an optional command that the user may run. Skills do not try to
 invoke it. Claude Code implements `/goal` as a session prompt-based Stop hook, so the
-skill hooks use the same supported mechanism.
+skill hooks use the same supported hook type. They do not create session `/goal` state:
+they are active only with the skill and judge the last audit against their fixed checklist.
 
 ## Common work rules
 
 Every skill also follows these rules.
 
-1. **Set the working goal first.** Before any IDA or MCP tool call, name the target,
-   read-only or IDB-write scope, evidence needed, and clear done checks. Update this goal
-   when the target or scope changes.
+1. **State the working goal first.** Before any IDA or MCP tool call, write one short goal
+   with the target, read-only or IDB-write scope, evidence needed, and clear done checks.
+   Update it when the target or scope changes. This is a work record, not a `/goal` call;
+   the Stop hook is the part that keeps the turn going.
 2. **Use evidence in layers.** Treat decompiler output, auto-analysis, names, types, and
    comments as hypotheses. Use disassembly and raw bytes as the main static evidence.
    Check function bounds and instruction decoding when they are in doubt. A runtime
@@ -39,12 +46,12 @@ Every skill also follows these rules.
 4. **Fix known conflicts.** If new evidence disproves an in-scope name, type, prototype,
    or field, fix it before using it as a base for more work. Recompile affected functions
    and check the result.
-5. **Rename first, then apply the type.** In IDA, naming and typing are separate
-   operations, and applying a type does not reliably keep a symbol name. When you both
-   rename and type the same function, local, global, or stack variable, do the `rename`
-   step first and the `set_type` / `type_apply_batch` / `declare_stack` step after, as
-   separate calls. Do not rely on a type edit's `name` field to name the entity. Check that
-   the name survived after the type is applied.
+5. **Name and type with the right tools.** `rename` and `set_type` are separate operations.
+   A type edit's `name` field is an existing global or stack-member locator, not a new name.
+   Use an explicit `rename` when a new name is needed, apply the type with `set_type` or
+   `type_apply_batch`, and read both back. If a local is renamed first, use its new name as
+   the later type locator. `declare_stack` and `make_data` are combined create operations
+   and may set a name and type in one call.
 6. **Prefer known SDK and library types.** When an import, ordinal, GUID, COM vtable, or
    library function matches a known API, give it the real SDK name, prototype, structs, and
    flags one-to-one instead of a generic guess. IDA often names an import but does not apply
@@ -60,8 +67,8 @@ The Stop hook is a guard, not an unlimited runner:
 - it does not run after a user interrupt;
 - API errors fire `StopFailure` instead of `Stop`;
 - Claude Code ends the turn after eight consecutive Stop-hook blocks;
-- the prompt judge checks the completion report, so the report must give concrete
-  evidence and must not claim success only to pass the hook.
+- the prompt judge checks the last completion report, not the IDB or transcript by itself,
+  so the report must cover every checklist item with concrete evidence.
 
 After loading a skill, use Claude Code's `/hooks` view to confirm that its prompt-based
 `Stop` hook is active. The hook format follows the

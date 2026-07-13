@@ -7,32 +7,35 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-sdk-types task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: API identity and
+            evidence; exact target and SDK source; prototypes; structs and bitmask flags;
+            COM slot order; approved writes and read-back; open version or mapping gaps.
+            Return {"ok": true} only if the message names the target and write scope and
+            marks every checklist item pass or n/a with concrete evidence, with no required
+            work left; or states a real blocker needing user input, approval, or external
+            state and asks a direct question. Return {"ok": false, "reason": "the next
+            concrete work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Windows SDK and COM type recovery
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: identify the named SDK, DirectX, or
-COM API surface in the requested read-only or IDB-write mode; finish when each named API
-has an evidence source, a matching prototype, and its needed structs and flags declared and
-checked against the bytes.
+Before any IDA or MCP tool call, state a short working goal with target, scope, evidence,
+and Done checks: identify the named SDK, DirectX, or COM API surface in the requested
+read-only or IDB-write mode; finish when each named API has an evidence source and matching
+prototype, and its needed structs and flags are checked against the bytes. In IDB-write
+mode, also declare and apply the approved types.
 
 Update the working goal when the API set changes. Keep working until the done checks pass.
 Do not declare, rename, or apply a type in read-only mode.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -55,7 +58,7 @@ Check each evidence source that applies:
   module and version; do not guess.
 - **COM creation.** A `CoCreateInstance` or factory call takes a CLSID and an IID. The IID
   names the interface; each later call through the returned pointer is a virtual slot with a
-  known prototype. This is the main path for DirectX, which is COM based.
+  known prototype. This is a common path for COM-based DirectX APIs.
 - **GUID data.** A CLSID or IID is a 16-byte value in read-only or data memory. Match it to
   find the interface even without symbols:
 
@@ -74,15 +77,27 @@ hypothesis and add a `?` comment in approved write mode.
 
 Prefer a checked type library, then fall back to exact hand declarations.
 
-1. **Load an IDA type library** when the API is covered. In approved write mode an approved
-   `py_eval` call can add one:
+1. **Load an IDA type library** when the API is covered. Select the file by target bitness
+   and SDK line. IDA 9.4 uses versioned names such as `mssdk64_win10`, not `mssdk64`.
+   In approved write mode, an approved `py_eval` call can load and import a named type:
 
 ```python
 import ida_typeinf
-ida_typeinf.add_til("mssdk64", ida_typeinf.ADDTIL_DEFAULT)
+import ida_netnode
+import idc
+
+rc = ida_typeinf.add_til("mssdk64_win10", ida_typeinf.ADDTIL_DEFAULT)
+if rc != ida_typeinf.ADDTIL_OK:
+    raise RuntimeError(f"TIL load failed or is compiler-incompatible: {rc}")
+
+type_id = idc.import_type(-1, "_IMAGE_DOS_HEADER")
+if type_id == ida_netnode.BADNODE:
+    raise RuntimeError("type import failed")
 ```
 
-   Then `import_type` / `type_inspect` to confirm the struct exists.
+   Replace the TIL and type names with the checked target values. There is no MCP
+   `import_type` tool; the code above uses IDA 9.4's `idc.import_type`. Then use
+   `type_inspect` to confirm the imported declaration, size, and members.
 2. **Declare the SDK types one-to-one** when the library does not cover them (common for
    DirectDraw, DirectSound, and Direct3D structs and interfaces). Copy the layout from the
    SDK header for the right version:
@@ -96,22 +111,27 @@ declare_type({"decls":[
 ```
 
 3. **Declare the enums and flag sets** the API uses (`DDSD_*`, `DSBCAPS_*`, `D3DFVF_*`) with
-   `enum_upsert`, so flag operands render by name.
+   `enum_upsert`. Set `bitfield` to `true` for flags, so combined values render by name:
 
-Keep the SDK typedefs (`HRESULT`, `HWND`, `DWORD`, `LPDIRECTDRAWSURFACE`, and so on) so the
-decompiler output reads like the SDK.
+```text
+enum_upsert({"queries":[{"name":"DDSD_FLAGS","bitfield":true,"members":[{"name":"DDSD_CAPS","value":1},{"name":"DDSD_HEIGHT","value":2},{"name":"DDSD_WIDTH","value":4}]}]})
+```
 
-## 3. Apply in the right order: rename first, then type
+Keep the used SDK typedefs, such as `HRESULT`, `HWND`, `DWORD`, and
+`LPDIRECTDRAWSURFACE`, so the decompiler output reads like the SDK.
 
-In IDA, naming and typing are separate operations, and applying a type does not reliably
-keep a symbol name. Always do the name first, then the type, as separate steps:
+## 3. Name and type with explicit operations
+
+`rename` gives an entity a new name; `set_type` applies a type. Keep those operations
+explicit and read both results back. This example names the function and then types it:
 
 ```text
 rename({"batch":{"func":[{"addr":"<thunk or function>","name":"DirectDrawCreate"}]}})
 set_type({"edits":[{"addr":"<thunk or function>","signature":"HRESULT __stdcall DirectDrawCreate(GUID *lpGUID, LPDIRECTDRAW *lplpDD, IUnknown *pUnkOuter)"}]})
 ```
 
-For a COM object pointer, rename the variable, then apply the interface type:
+For a COM object pointer, this example renames the variable first, so the later type edit
+uses the new local name as its locator:
 
 ```text
 rename({"batch":{"local":[{"func_addr":"<owner>","old":"v5","new":"dd_surface"}]}})
@@ -119,9 +139,8 @@ set_type({"edits":[{"addr":"<owner>","variable":"dd_surface","ty":"struct IDirec
 force_recompile({"items":[{"addr":"<owner>"}]})
 ```
 
-Do not put the new name in the type edit's `name` field and skip the rename; apply the type
-after the rename and check that the name survived. Batch names together and types together,
-but keep the name step before the type step.
+Do not use a type edit's `name` field as a new name. It is an existing global or stack-member
+locator. Batch related operations when useful, then read back the final name and type.
 
 ## 4. Verify against the bytes
 
@@ -129,7 +148,8 @@ but keep the name step before the type step.
   mismatch means the wrong SDK version or the wrong struct (for example `DDSURFACEDESC`
   versus `DDSURFACEDESC2`); fix the declaration, do not bend an observed offset.
 - Each COM slot index must match the interface order in the header; confirm a slot by a call
-  site before naming it (see `ida-cpp-rtti` for vtable handling).
+  site before naming it. This skill owns known interface identity, header order, and slot
+  prototypes. Use `ida-cpp-rtti` only for unknown native C++ class or vtable discovery.
 - After `force_recompile`, the call should read like the SDK: named function, typed
   arguments, and `desc->dwFlags` instead of `*(a1 + 8)`.
 
@@ -144,9 +164,11 @@ runtime, confirm the slot target is in the expected module, then rebase before r
 Finish only when:
 
 - each named API states its evidence source (import, ordinal map, GUID, or checked behavior);
-- applied prototypes use the correct SDK types and convention;
-- referenced SDK structs and flag sets are declared and their offsets match the bytes;
+- each prototype uses the correct SDK types and convention;
+- in read-only mode, referenced structs and bitmask flags have exact proposed declarations;
+  every observed offset and value matches the bytes;
+- in IDB-write mode, approved structs and bitmask flags are declared and checked;
 - COM interfaces have the right vtable order and only confirmed slots are named;
-- every rename was done before its type application and the names survived;
-- approved changes were recompiled and read back;
+- every requested name and type was handled by its explicit operation and read back;
+- approved changes were recompiled and checked;
 - unmapped ordinals, unknown GUIDs, and version doubts are stated.

@@ -7,31 +7,33 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-cold-start task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: analysis state and
+            platform; bounded entry-path kinds; external boundaries; ranked first targets;
+            allocation evidence; approved writes and read-back; open risks. Return
+            {"ok": true} only if the message names the target and write scope and marks
+            every checklist item pass or n/a with concrete evidence, with no required work
+            left; or states a real blocker needing user input, approval, or external state
+            and asks a direct question. Return {"ok": false, "reason": "the next concrete
+            work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Cold start
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: survey the named binary in the
-requested read-only or IDB-write mode; finish when entry paths, checked boundary types,
-first targets, and open risks are recorded.
+Before any IDA or MCP tool call, state a short working goal with target, write scope,
+entry-path kinds, evidence, and Done checks: survey the named binary; finish when the
+bounded entry paths, checked boundary types, first targets, and open risks are recorded.
 
 Update the working goal if the target becomes one subsystem or function. Keep working
 until the done checks pass. Ask before an IDB change when write authority is not clear.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -69,18 +71,17 @@ Known external prototypes give useful types to callers.
 
 1. Query used imports with `imports_query`.
 2. Check any thunk or local wrapper in disassembly.
-3. In IDB-write mode, name first and then apply the type (see below), using supported
-   prototypes with `set_type`.
+3. In IDB-write mode, use `rename` for a new name and `set_type` for a supported prototype.
 4. Call `force_recompile` for affected callers and read them again.
 
 Go past bare names. IDA often names an import but does not apply its full SDK type. When an
 import, an ordinal import, a COM creation call, or a GUID matches a known Windows SDK,
 DirectX, or COM API, route to **ida-sdk-types** to give it the real prototype, structs, and
-flags one-to-one. This turns `*(a1 + 8)` into `desc->dwFlags` across every caller.
+flags one-to-one. After type propagation, this can turn `*(a1 + 8)` into `desc->dwFlags`
+in affected callers.
 
-**Rename before type.** Naming and typing are separate operations in IDA. For the same
-import, thunk, or wrapper, run `rename` first, then `set_type`, as separate steps, and check
-that the name survived.
+Naming and typing are separate operations. A type edit does not create a new name. Use both
+tools when both facts are needed, then read the final name and type back.
 
 Do not apply a platform prototype from memory when the binary's ABI or library version is
 not known.
@@ -154,7 +155,9 @@ headers, or trailing data.
 Finish only when:
 
 - auto-analysis is ready and the platform and ABI are stated;
-- all relevant entry paths found in the requested scope are listed with evidence;
+- the goal's entry-path kinds are checked: loader entry, exports, TLS or framework starts,
+  and callbacks registered by in-scope code where applicable; any unsearched kind or bound
+  is stated;
 - in-scope external boundaries have checked prototypes;
 - the first analysis targets are ranked with a reason;
 - each claimed allocation object has its allocator path, size expression, and pointer-use

@@ -7,31 +7,34 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-decomp-verify task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: calls, transfers, and
+            memory effects; ABI rendering; widths and signs; function bounds; approved
+            fixes and read-back; remaining decompiler loss. Return {"ok": true} only if
+            the message names the target and write scope and marks every checklist item
+            pass or n/a with concrete evidence, with no required work left; or states a
+            real blocker needing user input, approval, or external state and asks a direct
+            question. Return {"ok": false, "reason": "the next concrete work"} for any
+            missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Decompiler verification
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: verify pseudocode for the named
-function in the requested read-only or IDB-write mode; finish when control transfers,
-calls, memory effects, widths, signs, and prototype use agree with checked disassembly.
+Before any IDA or MCP tool call, state a short working goal with target, scope, evidence,
+and Done checks: verify pseudocode for the named function in the requested read-only or
+IDB-write mode; finish when control transfers, calls, memory effects, widths, signs, and
+prototype use agree with checked disassembly.
 
 Update the working goal for each new function. Keep working until the done checks pass.
 Do not fix the IDB in read-only mode; report the smallest supported fix instead.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -94,8 +97,8 @@ For each confirmed mismatch:
    - `declare_stack` for a stack object;
    - `set_op_type` for a checked operand;
    - `define_func`, `define_code`, or `undefine` for checked boundary or code/data errors.
-   If the fix also renames the entity, run the `rename` step before the type step; a type
-   application does not reliably keep a name in IDA.
+   If the fix also needs a new name, use an explicit `rename`; the type edit does not create
+   that name. Read both facts back.
 4. Call `force_recompile` for the function and affected callers or callees.
 5. Compare again. The mismatch must be gone without a new semantic mismatch.
 

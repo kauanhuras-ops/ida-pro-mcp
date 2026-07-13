@@ -7,32 +7,35 @@ hooks:
         - type: prompt
           prompt: >-
             Decide whether Claude may stop the active ida-function-recon task. Review
-            $ARGUMENTS, especially last_assistant_message. Return {"ok": true} only if
-            the message names the current user target and write scope, lists concrete
-            evidence that all applicable Done checks passed, and says no required work
-            remains; or if it states a real blocker that needs user input, approval, or
-            external state and asks a direct question. Return {"ok": false, "reason":
-            "the next concrete work"} for a progress-only report, TODOs, unchecked
-            claims, failed or unrun checks, or unsupported completion.
+            $ARGUMENTS, especially last_assistant_message. Checklist: role and side effects;
+            callers, callees, branches, and data; ABI; approved writes and read-back;
+            conflict check; unresolved paths; final analyze_function check. Return
+            {"ok": true} only if the message names the target and write scope and marks
+            every checklist item pass or n/a with concrete evidence, with no required work
+            left; or states a real blocker needing user input, approval, or external state
+            and asks a direct question. Return {"ok": false, "reason": "the next concrete
+            work"} for any missing, failed, unrun, or unsupported item.
           timeout: 30
           continueOnBlock: true
 ---
 
 # Function recon
 
+Target: IDA Professional 9.4 with ida-pro-mcp 3.3.0.
+
 ## Goal and stop contract
 
-Before any IDA or MCP tool call, set the working goal: analyze the named function in the
-requested read-only or IDB-write mode; finish when behavior, control flow, calls, data
-use, and prototype questions are checked against disassembly.
+Before any IDA or MCP tool call, state a short working goal with target, scope, evidence,
+and Done checks: analyze the named function in the requested read-only or IDB-write mode;
+finish when behavior, control flow, calls, data use, and prototype questions are checked
+against disassembly.
 
 Update the working goal if the target changes. Keep working until the done checks pass. A
 request such as “what does this function do?” is read-only unless the user also asks for
 IDB changes.
 
-The frontmatter `Stop` hook checks the last response. Before a final response, include a
-short completion audit with the target, write scope, checks run, results, and remaining
-work. If required work remains, the hook blocks stopping and returns the next work.
+Final audit: mark every hook checklist item `pass`, `n/a`, or `blocked` and give evidence.
+The hook blocks a stop when any required item is unproved.
 
 ## Evidence rule
 
@@ -104,9 +107,8 @@ Use **ida-calling-convention** for the full ABI check. In this function:
 5. Look for hidden return buffers, `this` pointers, variadic use, and nonstandard register
    use.
 
-In write mode, name the function first (step 2), then apply the prototype and recompile.
-Naming and typing are separate operations in IDA, so keep them as separate steps in that
-order and check the name survived:
+In write mode, use `rename` for a new function name and `set_type` for the prototype, then
+recompile and read both facts back:
 
 ```text
 set_type({"edits":[{"addr":"<function>","signature":"int parse_config(Config *cfg, const char *path)"}]})
@@ -140,9 +142,9 @@ set_comments({"items":[{"addr":"<instruction>","comment":"Checks the parsed leng
 Use `make_data` only when replacing or creating a data item is intended. It may replace an
 existing item, so do not use it as a simple type hint.
 
-When you both rename and type the same local, global, or stack variable, run the `rename`
-step before the `set_type` step, as separate calls; a type application does not reliably
-keep a name. Check that the name survived.
+When a local, global, or stack variable needs both facts, use explicit name and type
+operations. If a local is renamed first, use its new name as the later type locator.
+`declare_stack` and `make_data` may create a name and type together.
 
 After a type or name change that affects pseudocode, call `force_recompile` and read the
 result. Fix a known conflict before going on.
