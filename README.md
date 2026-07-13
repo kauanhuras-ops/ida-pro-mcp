@@ -66,7 +66,8 @@ uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-a
 The `skills/` directory ships a set of model-invoked analysis playbooks (see
 [`skills/README.md`](skills/README.md)): `ida-re-methodology` (main workflow and router),
 `ida-cold-start` (fresh IDB → first targets), `ida-function-recon`, `ida-cluster-analysis`,
-`ida-struct-recovery`, `ida-cpp-rtti` (C++ classes from constructors/RTTI/vtables), `ida-decomp-verify`,
+`ida-struct-recovery`, `ida-cpp-rtti` (C++ classes from constructors/RTTI/vtables),
+`ida-sdk-types` (Windows SDK/DirectX/COM types one-to-one), `ida-decomp-verify`,
 `ida-calling-convention`, and `ida-dynamic-verify` (confirm one fact by running the target under the
 debugger). Each `SKILL.md` has a `description` that lets the model auto-load it when relevant.
 
@@ -92,7 +93,7 @@ across all projects, auto-loaded by description:
 ```bash
 # macOS/Linux: symlink each skill dir into your personal skills folder
 mkdir -p ~/.claude/skills
-for d in ida-re-methodology ida-cold-start ida-function-recon ida-cluster-analysis ida-struct-recovery ida-cpp-rtti ida-decomp-verify ida-calling-convention ida-dynamic-verify; do
+for d in ida-re-methodology ida-cold-start ida-function-recon ida-cluster-analysis ida-struct-recovery ida-cpp-rtti ida-sdk-types ida-decomp-verify ida-calling-convention ida-dynamic-verify; do
   ln -sfn "$(pwd)/skills/$d" ~/.claude/skills/"$d"
 done
 ```
@@ -100,7 +101,7 @@ done
 ```powershell
 # Windows (PowerShell): symlink (or use Copy-Item to copy instead)
 mkdir "$env:USERPROFILE\.claude\skills" -Force
-foreach ($d in "ida-re-methodology","ida-cold-start","ida-function-recon","ida-cluster-analysis","ida-struct-recovery","ida-cpp-rtti","ida-decomp-verify","ida-calling-convention","ida-dynamic-verify") {
+foreach ($d in "ida-re-methodology","ida-cold-start","ida-function-recon","ida-cluster-analysis","ida-struct-recovery","ida-cpp-rtti","ida-sdk-types","ida-decomp-verify","ida-calling-convention","ida-dynamic-verify") {
   New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\$d" -Target "$PWD\skills\$d" -Force
 }
 ```
@@ -126,6 +127,7 @@ Before reverse-engineering work over the IDA Pro MCP tools, read the relevant pl
 - `ida-cluster-analysis/SKILL.md` — analyze/cluster groups of functions
 - `ida-struct-recovery/SKILL.md` — reconstruct structs/classes/vtables
 - `ida-cpp-rtti/SKILL.md` — recover C++ classes from constructors/RTTI/vtables (MSVC/GCC)
+- `ida-sdk-types/SKILL.md` — name Windows SDK/DirectX/COM APIs and pull their prototypes/structs one-to-one
 - `ida-decomp-verify/SKILL.md` — find decompiler errors vs disassembly
 - `ida-calling-convention/SKILL.md` — confirm convention/args/return from the bytes
 - `ida-dynamic-verify/SKILL.md` — confirm real size/args/data by running it under the debugger (unsafe)

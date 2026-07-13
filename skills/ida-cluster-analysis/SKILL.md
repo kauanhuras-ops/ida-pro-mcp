@@ -111,14 +111,19 @@ A useful order is:
 5. entry and policy functions.
 
 Use **ida-function-recon** for each member, **ida-struct-recovery** for shared layouts,
-and **ida-calling-convention** for boundary prototypes.
+and **ida-calling-convention** for boundary prototypes. A group built around a known
+Windows SDK, DirectX, or COM interface is a ready-made cluster: take its member prototypes
+and shared structs one-to-one from **ida-sdk-types** (a COM interface and its methods form
+one such group).
 
 ## 4. Record approved changes
 
 In IDB-write mode:
 
 1. Apply a shared type only after its offsets and widths have evidence.
-2. Batch names or prototypes that come from the same checked model.
+2. Batch names or prototypes that come from the same checked model. For any entity you both
+   rename and type, run the `rename` step before the type step; a type application does not
+   reliably keep a name in IDA. Check that names survived.
 3. Call `force_recompile` for affected members.
 4. Run `analyze_component` again and check that calls and shared data still agree.
 

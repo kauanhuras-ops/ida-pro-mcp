@@ -62,6 +62,7 @@ Runtime evidence applies to the observed run and input only.
 | Related function group | **ida-cluster-analysis** | `callgraph`, `analyze_component` |
 | Struct, class, union, or vtable | **ida-struct-recovery** | `read_struct`, `declare_type` |
 | C++ classes from RTTI or constructors | **ida-cpp-rtti** | `find_regex`, `xref_query`, `declare_type` |
+| Windows SDK, DirectX, or COM API | **ida-sdk-types** | `imports_query`, `find_bytes`, `declare_type` |
 | Pseudocode check | **ida-decomp-verify** | `decompile`, `disasm`, `basic_blocks` |
 | ABI or prototype | **ida-calling-convention** | `disasm`, `xref_query`, `set_type` |
 | Runtime fact | **ida-dynamic-verify** | `dbg_start`, `dbg_add_bp`, `dbg_read` |
@@ -81,7 +82,8 @@ Use this loop on each in-scope item:
    observation that supports or rejects the claim.
 4. **Record it:** in read-only mode, keep it for the report. In IDB-write mode, apply the
    smallest supported `rename`, `set_type`, `declare_type`, or `set_comments` change.
-   Do not turn an uncertain idea into a certain name.
+   Do not turn an uncertain idea into a certain name. When you both rename and type the same
+   entity, do the `rename` first and the type after, as separate steps (see below).
 5. **Propagate:** after a type, prototype, or struct change, call `force_recompile` for
    affected functions and inspect the changed output.
 6. **Recheck:** if the change creates a mismatch, correct or remove the claim before
@@ -90,11 +92,18 @@ Use this loop on each in-scope item:
 Batch writes that come from the same evidence. Do not collect unrelated changes into one
 large batch. Use `rename` with `dry_run` for a large or collision-prone rename.
 
+**Rename before type.** In IDA, naming and typing are separate operations, and applying a
+type does not reliably keep a symbol name. So for the same function, local, global, or stack
+variable, always run the `rename` step before the `set_type` / `type_apply_batch` /
+`declare_stack` step, as separate calls, and check that the name survived. Do not depend on
+a type edit's `name` field to name the entity.
+
 ## Work order
 
 Prefer facts that improve many later views:
 
-1. imports and thunks with known prototypes;
+1. imports and thunks with known prototypes, including Windows SDK, DirectX, and COM APIs
+   given their real one-to-one types (route to `ida-sdk-types`);
 2. real entry points and exports;
 3. string- or constant-anchored functions;
 4. high-use leaf functions;

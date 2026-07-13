@@ -85,13 +85,17 @@ extension at one use; it does not by itself prove the best source-language type.
 For each confirmed mismatch:
 
 1. State the disassembly fact and the pseudocode result that conflicts with it.
-2. Find the smallest source fact that explains it.
+2. Find the smallest source fact that explains it. A common source is a missing or wrong
+   Windows SDK / COM type on a call: the real prototype or struct fixes the render (use
+   **ida-sdk-types**).
 3. In IDB-write mode, apply only that fix:
    - `set_type` for a prototype or variable;
    - **ida-struct-recovery** for a layout;
    - `declare_stack` for a stack object;
    - `set_op_type` for a checked operand;
    - `define_func`, `define_code`, or `undefine` for checked boundary or code/data errors.
+   If the fix also renames the entity, run the `rename` step before the type step; a type
+   application does not reliably keep a name in IDA.
 4. Call `force_recompile` for the function and affected callers or callees.
 5. Compare again. The mismatch must be gone without a new semantic mismatch.
 

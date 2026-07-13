@@ -167,11 +167,13 @@ In approved IDB-write mode:
 
 - size or layout evidence routes to **ida-struct-recovery**;
 - ABI evidence routes to **ida-calling-convention**;
+- a confirmed COM slot or SDK object routes to **ida-sdk-types** for its one-to-one type;
 - an indirect target may support `rename` and `set_type`;
 - produced data may support `set_comments`.
 
-Recompile affected functions and read them back. In read-only IDB mode, make no IDB
-change.
+For a target you both rename and type, run the `rename` step before the `set_type` step; a
+type application does not reliably keep a name in IDA. Recompile affected functions and read
+them back. In read-only IDB mode, make no IDB change.
 
 ## Done
 

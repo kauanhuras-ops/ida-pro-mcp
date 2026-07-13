@@ -70,6 +70,10 @@ Use evidence in this order:
 5. constants and instruction patterns;
 6. control flow and memory effects.
 
+If this function is a Windows SDK, DirectX, or COM API (by import name, ordinal, GUID, or
+COM slot), give it the real SDK name, prototype, and structs one-to-one — route to
+**ida-sdk-types** — rather than a generic name.
+
 Use the real `find` schema:
 
 ```text
@@ -100,7 +104,9 @@ Use **ida-calling-convention** for the full ABI check. In this function:
 5. Look for hidden return buffers, `this` pointers, variadic use, and nonstandard register
    use.
 
-In write mode, apply a supported prototype and recompile:
+In write mode, name the function first (step 2), then apply the prototype and recompile.
+Naming and typing are separate operations in IDA, so keep them as separate steps in that
+order and check the name survived:
 
 ```text
 set_type({"edits":[{"addr":"<function>","signature":"int parse_config(Config *cfg, const char *path)"}]})
@@ -133,6 +139,10 @@ set_comments({"items":[{"addr":"<instruction>","comment":"Checks the parsed leng
 
 Use `make_data` only when replacing or creating a data item is intended. It may replace an
 existing item, so do not use it as a simple type hint.
+
+When you both rename and type the same local, global, or stack variable, run the `rename`
+step before the `set_type` step, as separate calls; a type application does not reliably
+keep a name. Check that the name survived.
 
 After a type or name change that affects pseudocode, call `force_recompile` and read the
 result. Fix a known conflict before going on.

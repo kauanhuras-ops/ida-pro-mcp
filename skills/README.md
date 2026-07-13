@@ -1,6 +1,6 @@
 # IDA Pro MCP analysis skills
 
-This set has nine analysis skills for work on an IDA database through MCP. Start with
+This set has ten analysis skills for work on an IDA database through MCP. Start with
 `ida-re-methodology`. It sets the work scope and sends the task to a focused skill.
 
 ## Stop-hook contract
@@ -39,7 +39,18 @@ Every skill also follows these rules.
 4. **Fix known conflicts.** If new evidence disproves an in-scope name, type, prototype,
    or field, fix it before using it as a base for more work. Recompile affected functions
    and check the result.
-5. **Report the result.** State what was checked, what changed, what evidence supports it,
+5. **Rename first, then apply the type.** In IDA, naming and typing are separate
+   operations, and applying a type does not reliably keep a symbol name. When you both
+   rename and type the same function, local, global, or stack variable, do the `rename`
+   step first and the `set_type` / `type_apply_batch` / `declare_stack` step after, as
+   separate calls. Do not rely on a type edit's `name` field to name the entity. Check that
+   the name survived after the type is applied.
+6. **Prefer known SDK and library types.** When an import, ordinal, GUID, COM vtable, or
+   library function matches a known API, give it the real SDK name, prototype, structs, and
+   flags one-to-one instead of a generic guess. IDA often names an import but does not apply
+   its full type; close that gap. Use `ida-sdk-types` for Windows SDK, DirectX, and COM.
+   Still confirm each struct against the observed offsets and widths.
+7. **Report the result.** State what was checked, what changed, what evidence supports it,
    what remains uncertain, and whether every applicable done check passed.
 
 ## Hook limits and checks
@@ -66,6 +77,7 @@ After loading a skill, use Claude Code's `/hooks` view to confirm that its promp
 | **ida-cluster-analysis** | A related function group | Map a subsystem or shared-data group |
 | **ida-struct-recovery** | Structs, classes, unions, and vtables | Raw base-plus-offset accesses hide layout |
 | **ida-cpp-rtti** | C++ classes from RTTI and constructors | Vtable writes, virtual calls, RTTI, or mangled names |
+| **ida-sdk-types** | Windows SDK, DirectX, and COM types | An import, ordinal, GUID, or COM call matches a known API |
 | **ida-decomp-verify** | Pseudocode checks | Hex-Rays output may be wrong or incomplete |
 | **ida-calling-convention** | ABI, arguments, and return type | A prototype needs proof |
 | **ida-dynamic-verify** | Debugger-based checks | Static evidence cannot settle a fact and the user has approved execution |
@@ -78,7 +90,8 @@ ida-re-methodology
 ├── ida-function-recon
 │   ├── ida-calling-convention
 │   ├── ida-struct-recovery
-│   │   └── ida-cpp-rtti
+│   │   ├── ida-cpp-rtti
+│   │   └── ida-sdk-types
 │   └── ida-decomp-verify
 ├── ida-cluster-analysis
 │   └── focused skills for each member

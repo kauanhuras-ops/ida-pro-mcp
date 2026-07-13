@@ -123,13 +123,18 @@ do not return.
 - Hand-written or compiler-local register use may need IDA `__usercall` syntax.
 - Tail calls can hide the callee epilogue; check callers and the tail target.
 
+If the function is a known Windows SDK, DirectX, or COM API, its published prototype already
+gives the convention, argument types, and return type; take it one-to-one from
+**ida-sdk-types** and confirm it against the call sites instead of re-deriving each part.
+
 When static evidence remains load-bearing and unclear, use **ida-dynamic-verify** only
 with explicit user approval. Live values can support a call for one run, but formal
 parameters still need call and use evidence.
 
 ## 6. Apply and verify
 
-In IDB-write mode:
+In IDB-write mode, name the function first, then apply the prototype (naming and typing are
+separate operations in IDA; a type application does not reliably keep a name):
 
 ```text
 set_type({"edits":[{"addr":"<function>","signature":"int parse(struct Ctx *ctx, const char *text, int length)"}]})

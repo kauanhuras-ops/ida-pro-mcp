@@ -103,6 +103,11 @@ State whether each size is exact, an upper bound, or a lower bound.
 
 ## 4. Declare and apply
 
+If the base value is a known SDK, DirectX, or COM structure (from an API argument, a GUID,
+or a COM interface), do not reinvent it. Declare the SDK layout one-to-one and confirm it
+against the observed offsets — use **ida-sdk-types**. Reinvent a layout only for a type with
+no known source.
+
 In IDB-write mode, a partial declaration is useful when each named member has evidence:
 
 ```text
@@ -128,6 +133,9 @@ force_recompile({"items":[{"addr":"<owner1>"},{"addr":"<owner2>"}]})
 
 Use `make_data` only when the task needs a data item to be created or replaced. For an
 existing global, prefer `set_type` when it is enough.
+
+When you also rename an owner variable or global, run the `rename` step before the type
+step; a type application does not reliably keep a name in IDA. Check that the name survived.
 
 Read the owners again. A better decompile is a check on application, not proof of layout.
 If new evidence conflicts with a field, correct the shared type and recheck every

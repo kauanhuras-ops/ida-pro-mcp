@@ -69,8 +69,18 @@ Known external prototypes give useful types to callers.
 
 1. Query used imports with `imports_query`.
 2. Check any thunk or local wrapper in disassembly.
-3. In IDB-write mode, apply supported prototypes with `set_type`.
+3. In IDB-write mode, name first and then apply the type (see below), using supported
+   prototypes with `set_type`.
 4. Call `force_recompile` for affected callers and read them again.
+
+Go past bare names. IDA often names an import but does not apply its full SDK type. When an
+import, an ordinal import, a COM creation call, or a GUID matches a known Windows SDK,
+DirectX, or COM API, route to **ida-sdk-types** to give it the real prototype, structs, and
+flags one-to-one. This turns `*(a1 + 8)` into `desc->dwFlags` across every caller.
+
+**Rename before type.** Naming and typing are separate operations in IDA. For the same
+import, thunk, or wrapper, run `rename` first, then `set_type`, as separate steps, and check
+that the name survived.
 
 Do not apply a platform prototype from memory when the binary's ABI or library version is
 not known.

@@ -128,6 +128,8 @@ it in the first integer register. Verify with `ida-calling-convention`.
 - Name a slot function `Class::method` only when its role has evidence (a demangled symbol,
   a clear string, or checked behavior). Do not name a slot from its index alone.
 - Set each checked slot prototype with the object as the first parameter.
+- Run the slot `rename` step before the slot `set_type` step; a type application does not
+  reliably keep a name in IDA. Check that the name survived.
 - Apply the object type to `this` in proven methods, and set the vtable global type:
 
 ```text
@@ -159,7 +161,8 @@ not treat it as class logic.
   `ida-struct-recovery`.
 - **COM interfaces.** These are vtable-only. The first three slots are `QueryInterface`,
   `AddRef`, and `Release` (IUnknown). Type them from the standard signatures and confirm by
-  use.
+  use. For a known interface (from a CLSID/IID or a DirectX API), take the full slot
+  prototypes and structs one-to-one from **ida-sdk-types** instead of deriving each slot.
 - **Itanium or GCC.** Same idea, different data and mangling; demangle `_Z` names with IDA.
 
 ## Dynamic check
