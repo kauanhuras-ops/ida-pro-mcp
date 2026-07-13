@@ -1,8 +1,7 @@
 # IDA Pro MCP analysis skills
 
 This set has nine analysis skills for work on an IDA database through MCP. Start with
-`ida-re-methodology`. It sets the work scope and sends the task to a focused skill. A tenth
-skill, `ida-python`, is a reference for IDAPython used from approved `py_eval` calls.
+`ida-re-methodology`. It sets the work scope and sends the task to a focused skill.
 
 ## Stop-hook contract
 

@@ -68,8 +68,7 @@ The `skills/` directory ships a set of model-invoked analysis playbooks (see
 `ida-cold-start` (fresh IDB → first targets), `ida-function-recon`, `ida-cluster-analysis`,
 `ida-struct-recovery`, `ida-cpp-rtti` (C++ classes from constructors/RTTI/vtables), `ida-decomp-verify`,
 `ida-calling-convention`, and `ida-dynamic-verify` (confirm one fact by running the target under the
-debugger). `ida-python` is a companion IDAPython reference for approved `py_eval` work. Each `SKILL.md`
-has a `description` that lets the model auto-load it when relevant.
+debugger). Each `SKILL.md` has a `description` that lets the model auto-load it when relevant.
 
 They share one discipline: **use evidence in layers** — decompiler output, auto-analysis, names, types,
 and comments are hypotheses; disassembly and raw bytes are the main static evidence; a runtime
