@@ -12,6 +12,11 @@ description: Find and fix places where Hex-Rays decompiler output is WRONG or mi
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it per function verified:
+`/goal verify <func> pseudocode against disasm and fix every discrepancy at its source`.
+
 Hex-Rays output is a hypothesis built on guessed prototypes, types, and stack layout. This skill is
 the disciplined diff between that hypothesis and the disassembly, and the fix for each disagreement.
 When pseudocode and disassembly disagree, the disassembly is right.

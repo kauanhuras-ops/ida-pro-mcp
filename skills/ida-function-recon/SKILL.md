@@ -12,6 +12,11 @@ description: Deep, complete workup of a SINGLE function over IDA Pro MCP — fro
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it as the target sharpens:
+`/goal fully name & type <func>, confirm its prototype from disasm, resolve every struct access`.
+
 Convert a single function into a fully named, typed, verified unit. The steps below look sequential,
 but in practice you **interleave reading and writing**: understand one thing, commit it, understand
 the next. Do not run Steps 1–2 as a long read and save all the writes for Steps 3–4. The output of

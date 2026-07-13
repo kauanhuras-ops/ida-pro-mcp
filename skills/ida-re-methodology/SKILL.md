@@ -12,6 +12,13 @@ description: Master workflow for productive reverse engineering of an IDA Pro da
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal first — `/goal`
+
+Before touching the database, pin the session objective with the **`/goal`** command, and **re-issue
+it whenever the target changes** so the active goal always reflects what you're working on right now:
+`/goal reverse <target/subsystem>: name + type everything, confirm every convention/return from disasm`.
+Every focused skill below re-sets `/goal` to its own concrete target on entry.
+
 The goal of a session is a database where **every reachable function, parameter, global, and
 structure is named and correctly typed, and every calling convention and return type is confirmed
 against the disassembly**. This skill is the router and the discipline; the focused skills below do

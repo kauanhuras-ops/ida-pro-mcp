@@ -12,6 +12,11 @@ description: Analyze and cluster GROUPS of related functions over IDA Pro MCP �
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it as you descend into members:
+`/goal map & type the <name> cluster (leaves→roots), recover its shared struct/enum, name every function`.
+
 A cluster is a set of functions that belong together: a call tree under one root, everything that
 touches one global/struct, or a family sharing a string/import theme (all the `SSL_*` callers, all
 the crypto). Analyze the cluster as a unit so shared types and names propagate across it at once.

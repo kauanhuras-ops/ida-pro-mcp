@@ -12,6 +12,11 @@ description: Confirm a function's calling convention, argument count/types, and 
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it as the prototype firms up:
+`/goal confirm <func> convention/args/return from the bytes and set its prototype`.
+
 A prototype is a claim about the ABI contract. Confirm every part of it against the disassembly before
 `set_type`. This is the step that makes every caller render correctly, so getting it right pays off
 across the whole database.

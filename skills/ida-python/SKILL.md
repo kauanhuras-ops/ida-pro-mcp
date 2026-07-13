@@ -12,6 +12,11 @@ description: IDA Pro Python scripting for reverse engineering. Use when writing 
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it whenever the task shifts:
+`/goal <what this script/analysis must achieve, e.g. enumerate & type all callers of X>`.
+
 Use modern `ida_*` modules. Avoid legacy `idc` module.
 
 ## Module Router

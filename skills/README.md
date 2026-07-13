@@ -9,6 +9,11 @@ fixpoint, and confirm every claim against the bytes.**
 > and silently breaks; the disassembly is the bytes the CPU runs and never lies. Every skill opens
 > with this rule — when pseudocode or a comment disagrees with the disasm, the disasm wins.
 
+Each skill also pins the current objective with the **`/goal`** command on entry and re-issues it as
+the target sharpens. This requires your own `/goal` skill/command to be installed alongside these
+(Claude Code only; Codex has no slash-command mechanism). If `/goal` isn't present the step is simply
+skipped — the rest of the skill still works.
+
 Skills auto-load from this directory (`skills/<name>/SKILL.md`). Start with `ida-re-methodology`; it
 routes to the rest.
 

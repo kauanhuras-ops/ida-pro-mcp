@@ -12,6 +12,11 @@ description: Recover C structs, classes, vtables, and unions from disassembly ov
 > to instructions you read yourself in `disasm` / `insn_query`. Whenever pseudocode or a comment
 > disagrees with the disassembly, the disassembly wins — every time.
 
+## Set the goal — `/goal`
+
+On entry, pin the objective with the **`/goal`** command, and re-issue it as the layout firms up:
+`/goal recover struct <Name> from access widths in disasm and apply it across every owner`.
+
 A struct is proven by how code accesses memory through a base pointer. Read the accesses, derive the
 layout, declare the type, apply it, and the pointer arithmetic collapses into named fields everywhere.
 
